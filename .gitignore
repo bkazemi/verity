@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.env
+*.tgz
+.wrangler/
+.dev.vars
+.dev.vars.*
+.env.*
+wrangler.jsonc

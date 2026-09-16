@@ -1,0 +1,68 @@
+{
+  "name": "verity",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Self-hosted account-to-account verification for Node.js",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "tsx --test tests/*.test.ts",
+    "check": "tsc --noEmit -p tsconfig.check.json",
+    "example": "tsx example/server.ts",
+    "test:consumer": "node scripts/test-consumer.mjs",
+    "format": "eslint . --fix && prettier --write .",
+    "format:check": "eslint . && prettier --check .",
+    "prepack": "npm run build",
+    "preview": "npm run build && tsx example/preview.ts",
+    "cloudflare:dev": "wrangler dev --local",
+    "cloudflare:check": "wrangler deploy --dry-run --outdir .wrangler/build",
+    "cloudflare:deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260915.1",
+    "@stylistic/eslint-plugin": "5.10.0",
+    "@typescript-eslint/parser": "8.70.0",
+    "esbuild": "^0.25.0",
+    "eslint": "10.10.0",
+    "miniflare": "5.20260915.0-alpha",
+    "prettier": "3.9.6",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0",
+    "wrangler": "^4.132.0"
+  },
+  "workspaces": [
+    "example"
+  ],
+  "dependencies": {
+    "@types/node": "^22.0.0",
+    "@types/pg": "^8.15.5",
+    "pg": "^8.16.3"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "docs"
+  ],
+  "exports": {
+    ".": {
+      "browser": {
+        "types": "./dist/browser.d.ts",
+        "default": "./dist/browser.js"
+      },
+      "node": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "default": {
+        "types": "./dist/browser.d.ts",
+        "default": "./dist/browser.js"
+      }
+    },
+    "./verity.js": "./dist/verity.js"
+  }
+}

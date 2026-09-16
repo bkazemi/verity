@@ -1,0 +1,43 @@
+// Copy to wrangler.jsonc and fill in your own deployment. wrangler.jsonc is
+// gitignored: it names a specific Cloudflare account and a specific site owner,
+// neither of which belongs in the library.
+//
+// Secrets are never set here. Use `wrangler secret put NAME` for:
+//   GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, OWNER_KEY
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "verity",
+  "account_id": "YOUR_CLOUDFLARE_ACCOUNT_ID",
+  "main": "cloudflare/worker.ts",
+  "compatibility_date": "2026-07-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // Serve the backend from a host a reader can tie to the site making the
+  // claim. Keep workers_dev true until the custom domain answers, then set it
+  // false: the Worker rejects every origin except PUBLIC_ORIGIN, so only one
+  // of the two can serve at a time.
+  "workers_dev": true,
+  // "routes": [{ "pattern": "verity.example.org", "custom_domain": true }],
+  "preview_urls": false,
+  "observability": { "enabled": false },
+
+  // Keep the object name, binding and class identity stable across deploys:
+  // changing them abandons the stored connections.
+  "durable_objects": {
+    "bindings": [{ "name": "VERITY", "class_name": "VerityStore" }],
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["VerityStore"] }],
+
+  "vars": {
+    // Drives baseUrl, every evidenceUrl and the verifier name. HTTPS, no
+    // trailing slash, and it must match the origin actually serving requests.
+    "PUBLIC_ORIGIN": "https://verity.example.org",
+    // The site whose local subject is being linked. This is a claim the
+    // evidence attributes to the site, not something the backend demonstrates.
+    "SITE_NAME": "example.org",
+    "OWNER_LABEL": "your-handle",
+    "OWNER_REFERENCE": "example.org author",
+    "OWNER_PROFILE_URL": "https://example.org/about/",
+    "REPORT_URL": "mailto:you@example.org",
+  },
+}

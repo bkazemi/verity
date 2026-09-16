@@ -1,0 +1,76 @@
+import type { Records, Storage, Transaction, Provider } from '../src/core/index.js';
+
+export class MemoryStorage implements Storage {
+  rows = new Map<string, unknown>();
+  private tail: Promise<unknown> = Promise.resolve();
+
+  transaction<T>(work: (tx: Transaction) => Promise<T>): Promise<T> {
+    const operation = this.tail.then(async () => {
+      const rows = structuredClone(this.rows);
+
+      const result = await work({
+        async get<K extends keyof Records>(kind: K, id: string) {
+          return structuredClone(rows.get(`${kind}:${id}`)) as Records[K] | undefined;
+        },
+        async put(kind, id, value) {
+          rows.set(`${kind}:${id}`, structuredClone(value));
+        },
+        async delete(kind, id) {
+          rows.delete(`${kind}:${id}`);
+        },
+        async list<K extends keyof Records>(kind: K) {
+          return [...rows]
+            .filter(([key]) => key.startsWith(`${kind}:`))
+            .map(([, value]) => structuredClone(value) as Records[K]);
+        },
+      });
+
+      this.rows = rows;
+
+      return result;
+    });
+
+    this.tail = operation.catch(() => {});
+
+    return operation;
+  }
+}
+
+export const alice = {
+  id: 'private-local-1',
+  label: 'Alice',
+  reference: 'member-1',
+  profileUrl: 'https://site.test/users/1',
+};
+
+export const bob = { id: 'private-local-2', label: 'Bob', reference: 'member-2' };
+
+/** A link whose local side is a page rather than one of the site's accounts. */
+export const projectPage = {
+  id: 'private-local-3',
+  kind: 'page' as const,
+  label: 'Verity project page',
+  reference: 'site.test/projects/verity',
+  profileUrl: 'https://site.test/projects/verity',
+};
+
+export function fakeProvider(): Provider & { calls: number; externalId: string } {
+  return {
+    id: 'github',
+    name: 'GitHub',
+    calls: 0,
+    externalId: '42',
+    authorizationUrl({ state, challenge, redirectUri }) {
+      return `https://provider.test/authorize?${new URLSearchParams({ state, challenge, redirect_uri: redirectUri })}`;
+    },
+    async authenticate() {
+      this.calls++;
+
+      return {
+        id: this.externalId,
+        handle: 'known-alice',
+        profileUrl: 'https://github.com/known-alice',
+      };
+    },
+  };
+}

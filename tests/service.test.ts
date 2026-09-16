@@ -1,0 +1,274 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { VerityService } from '../src/server/service.js';
+import { alice, bob, fakeProvider, MemoryStorage, projectPage } from './helpers.js';
+
+function fixture() {
+  let now = 1000000;
+
+  const storage = new MemoryStorage(),
+    provider = fakeProvider();
+
+  const service = new VerityService({
+    storage,
+    provider,
+    baseUrl: 'https://site.test/api/verity',
+    siteName: 'Site',
+    verifierName: 'Site',
+    profileOrigins: ['https://site.test'],
+    now: () => now,
+    validityMs: 1000,
+    shareTtlMs: 2000,
+  });
+
+  async function pending(local = alice) {
+    const flow = await service.start(local);
+    const state = new URL(flow.authorizationUrl).searchParams.get('state')!;
+
+    await service.callback(state, flow.binding, 'code');
+
+    return { ...flow, state };
+  }
+
+  async function connect(visibility: 'public' | 'unlisted' = 'unlisted') {
+    const flow = await pending();
+    const id = (await service.approve(flow.flowId, flow.binding, alice, visibility))!;
+
+    return { ...flow, id };
+  }
+
+  return {
+    service,
+    storage,
+    provider,
+    pending,
+    connect,
+    advance: (ms: number) => {
+      now += ms;
+    },
+  };
+}
+
+test('explicit approval, immutable pair, public-safe identity, idempotent completion', async () => {
+  const f = fixture(),
+    flow = await f.pending();
+
+  assert.equal((await f.service.mine(alice)).length, 0);
+  await assert.rejects(f.service.approve(flow.flowId, flow.binding, bob, 'public'));
+
+  const results = await Promise.all(
+    [1, 2].map(() => f.service.approve(flow.flowId, flow.binding, alice, 'public')),
+  );
+
+  assert.equal(results[0], results[1]);
+  const e = await f.service.read(results[0]!);
+
+  assert.equal(e.local.reference, alice.reference);
+  assert.ok(!('id' in e.local));
+  assert.equal(e.status, 'verified');
+  assert.equal((await f.service.mine(alice)).length, 1);
+});
+
+test('the local side of a link can be a page or the site itself, not only an account', async () => {
+  const f = fixture(),
+    flow = await f.pending(projectPage);
+
+  const id = (await f.service.approve(flow.flowId, flow.binding, projectPage, 'public'))!;
+  const e = await f.service.read(id);
+
+  assert.equal(e.local.kind, 'page');
+  assert.equal(e.local.reference, projectPage.reference);
+  assert.ok(!('id' in e.local));
+
+  // An unconfigured kind still means an account, and an unknown one is refused.
+  assert.equal(f.service.validateLocal(alice).kind, undefined);
+  assert.throws(() => f.service.validateLocal({ ...alice, kind: 'robot' as never }));
+});
+
+test('callback binding, replay, racing callbacks, expiration, and cancellation', async () => {
+  const f = fixture(),
+    flow = await f.service.start(alice),
+    state = new URL(flow.authorizationUrl).searchParams.get('state')!;
+
+  await assert.rejects(f.service.callback(state, 'stolen-browser', 'code'));
+  await assert.rejects(f.service.callback('substituted-state', flow.binding, 'code'));
+
+  const results = await Promise.allSettled(
+    [1, 2].map(() => f.service.callback(state, flow.binding, 'code')),
+  );
+
+  assert.equal(results.filter((r) => r.status === 'fulfilled').length, 1);
+  assert.equal(f.provider.calls, 1);
+  await assert.rejects(f.service.callback(state, flow.binding, 'code'));
+  await f.service.approve(flow.flowId, flow.binding, alice, 'unlisted', true);
+  assert.equal((await f.service.mine(alice)).length, 0);
+  const expired = await f.pending();
+
+  f.advance(600000);
+  await assert.rejects(f.service.approve(expired.flowId, expired.binding, alice, 'public'));
+});
+
+test('sharing is opt-in, hashed, read-only, rotated atomically, and expires separately', async () => {
+  const f = fixture(),
+    { id } = await f.connect();
+
+  await assert.rejects(f.service.read(id));
+  await assert.rejects(f.service.read(id, bob));
+  assert.equal((await f.service.read(id, alice)).visibility, 'unlisted');
+  assert.equal((await f.storage.transaction((tx) => tx.list('shares'))).length, 0);
+  await assert.rejects(f.service.share(id, bob));
+  await assert.rejects(f.service.revoke(id, bob));
+
+  const share = (await f.service.share(id, alice))!,
+    token = share.url.split('/').at(-1)!;
+
+  assert.equal(Buffer.from(token, 'base64url').length, 32);
+  assert.ok(!JSON.stringify([...f.storage.rows.values()]).includes(token));
+  assert.equal((await f.service.shared(token)).status, 'verified');
+  f.advance(1000);
+  assert.equal((await f.service.shared(token)).status, 'expired');
+  const links = await Promise.all([1, 2].map(() => f.service.share(id, alice)));
+
+  await assert.rejects(f.service.shared(token));
+  await assert.rejects(f.service.shared(links[0]!.url.split('/').at(-1)!));
+  const active = links[1]!.url.split('/').at(-1)!;
+
+  assert.equal((await f.service.shared(active)).status, 'expired');
+  f.advance(2000);
+  await assert.rejects(f.service.shared(active));
+  const newest = (await f.service.share(id, alice))!.url.split('/').at(-1)!;
+
+  await f.service.share(id, alice, true);
+  await assert.rejects(f.service.shared(newest));
+  assert.equal((await f.service.read(id, alice)).status, 'expired');
+});
+
+test('local revocation invalidates shares and cannot be reversed by approval retry', async () => {
+  const f = fixture(),
+    flow = await f.connect();
+
+  const token = (await f.service.share(flow.id, alice))!.url.split('/').at(-1)!;
+
+  await f.service.revoke(flow.id, alice);
+  await assert.rejects(f.service.shared(token));
+  await f.service.approve(flow.flowId, flow.binding, alice, 'public');
+  assert.equal((await f.service.read(flow.id, alice)).status, 'revoked');
+  await assert.rejects(f.service.share(flow.id, alice));
+});
+
+test('external revocation requires fresh authentication by the same stable provider account', async () => {
+  const f = fixture(),
+    { id } = await f.connect('public');
+
+  const wrong = await f.service.start(undefined, id, 'revoke');
+
+  f.provider.externalId = '99';
+
+  await f.service.callback(
+    new URL(wrong.authorizationUrl).searchParams.get('state')!,
+    wrong.binding,
+    'code',
+  );
+
+  assert.equal((await f.service.flow(wrong.flowId, wrong.binding)).phase, 'failed');
+  await assert.rejects(f.service.approve(wrong.flowId, wrong.binding, undefined, 'unlisted'));
+  f.provider.externalId = '42';
+  const right = await f.service.start(undefined, id, 'revoke');
+
+  await f.service.callback(
+    new URL(right.authorizationUrl).searchParams.get('state')!,
+    right.binding,
+    'code',
+  );
+
+  await f.service.approve(right.flowId, right.binding, undefined, 'unlisted');
+  assert.equal((await f.service.read(id)).status, 'revoked');
+});
+
+test('visibility changes require owner and external reauthentication, invalidate shares, preserve evidence', async () => {
+  const f = fixture(),
+    { id } = await f.connect();
+
+  const initial = await f.service.read(id, alice),
+    token = (await f.service.share(id, alice))!.url.split('/').at(-1)!;
+
+  await assert.rejects(f.service.start(bob, id, 'visibility'));
+  const flow = await f.service.start(alice, id, 'visibility');
+
+  await assert.rejects(f.service.approve(flow.flowId, flow.binding, alice, 'public'));
+
+  await f.service.callback(
+    new URL(flow.authorizationUrl).searchParams.get('state')!,
+    flow.binding,
+    'code',
+  );
+
+  await f.service.approve(flow.flowId, flow.binding, alice, 'public');
+  const after = await f.service.read(id);
+
+  assert.equal(after.approvedAt, initial.approvedAt);
+  assert.deepEqual(after.external, initial.external);
+  await assert.rejects(f.service.shared(token));
+});
+
+test('provider denial/failure and profile substitution create no connection', async () => {
+  const f = fixture();
+
+  await assert.rejects(f.service.start({ ...alice, profileUrl: 'https://evil.test/1' }));
+  const flow = await f.service.start(alice);
+
+  await f.service.callback(new URL(flow.authorizationUrl).searchParams.get('state')!, flow.binding);
+  assert.equal((await f.service.flow(flow.flowId, flow.binding)).phase, 'cancelled');
+
+  f.provider.authenticate = async () => {
+    throw new Error('secret provider error');
+  };
+
+  const failed = await f.pending();
+
+  assert.equal((await f.service.flow(failed.flowId, failed.binding)).phase, 'failed');
+  assert.deepEqual(await f.service.mine(alice), []);
+});
+
+test('external holder can revoke only the sharing link without disconnecting', async () => {
+  const f = fixture(),
+    { id } = await f.connect();
+
+  const token = (await f.service.share(id, alice))!.url.split('/').at(-1)!;
+  const flow = await f.service.start(undefined, id, 'share-revoke');
+
+  await f.service.callback(
+    new URL(flow.authorizationUrl).searchParams.get('state')!,
+    flow.binding,
+    'code',
+  );
+
+  await f.service.approve(flow.flowId, flow.binding, undefined, 'unlisted');
+  await assert.rejects(f.service.shared(token));
+  assert.equal((await f.service.read(id, alice)).status, 'verified');
+});
+
+test('short-lived sharing link expires while verification remains current', async () => {
+  const f = fixture();
+
+  f.service.options.shareTtlMs = 100;
+  const { id } = await f.connect();
+  const token = (await f.service.share(id, alice))!.url.split('/').at(-1)!;
+
+  f.advance(100);
+  await assert.rejects(f.service.shared(token));
+  assert.equal((await f.service.read(id, alice)).status, 'verified');
+});
+
+test('maintenance removes expired flow secrets and history after retention', async () => {
+  const f = fixture(),
+    { id } = await f.connect('public');
+
+  f.advance(600001);
+  await f.service.prune();
+  assert.equal((await f.storage.transaction((tx) => tx.list('flows'))).length, 0);
+  assert.equal((await f.service.read(id)).status, 'expired');
+  await f.service.prune(0);
+  await assert.rejects(f.service.read(id));
+  assert.equal((await f.storage.transaction((tx) => tx.list('audit'))).length, 0);
+});

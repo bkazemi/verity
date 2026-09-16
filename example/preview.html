@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>JoeSite — Default Verity badge</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: #f5f6f3;
+        color: #23312b;
+        font:
+          14px/1.6 system-ui,
+          sans-serif;
+      }
+      header {
+        background: white;
+        border-bottom: 1px solid #e0e5df;
+      }
+      nav {
+        max-width: 1040px;
+        margin: auto;
+        height: 70px;
+        display: flex;
+        align-items: center;
+        gap: 32px;
+        padding: 0 28px;
+      }
+      .brand {
+        white-space: nowrap;
+        flex-shrink: 0;
+        font-size: 21px;
+        font-weight: 750;
+        letter-spacing: -0.8px;
+      }
+      .brand b {
+        color: white;
+        background: #285c44;
+        padding: 4px 10px;
+        border-radius: 8px;
+        margin-right: 8px;
+        font-size: 18px;
+      }
+      .nav-item {
+        color: #7a857e;
+        font-size: 12px;
+      }
+      .preview-tag {
+        margin-left: auto;
+        font:
+          11px ui-monospace,
+          monospace;
+        color: #617269;
+        letter-spacing: 1px;
+      }
+      main {
+        max-width: 1040px;
+        padding: 38px 28px;
+        margin: auto;
+      }
+      .eyebrow {
+        font:
+          10px ui-monospace,
+          monospace;
+        letter-spacing: 1.5px;
+        color: #667b6e;
+        text-transform: uppercase;
+      }
+      h1 {
+        font-size: 32px;
+        line-height: 1.25;
+        letter-spacing: -1px;
+        margin: 10px 0;
+        font-weight: 650;
+      }
+      .intro {
+        color: #6d786f;
+        margin: 0 0 26px;
+      }
+      .stage {
+        display: grid;
+        grid-template-columns: 1.15fr 1fr;
+        gap: 28px;
+        align-items: center;
+      }
+      .profile {
+        border: 1px solid #dce3db;
+        border-radius: 16px;
+        overflow: hidden;
+        background: white;
+        box-shadow: 0 5px 20px #20362a06;
+      }
+      .cover {
+        height: 68px;
+        background:
+          repeating-linear-gradient(
+            120deg,
+            transparent,
+            transparent 40px,
+            #dce8dc 41px,
+            #dce8dc 42px
+          ),
+          #e9efe5;
+      }
+      .profile-content {
+        padding: 0 25px 25px;
+      }
+      .avatar {
+        width: 62px;
+        height: 62px;
+        display: grid;
+        place-items: center;
+        border-radius: 18px;
+        background: #2f5843;
+        color: #f2f5e8;
+        border: 4px solid white;
+        margin-top: -30px;
+        position: relative;
+        font:
+          26px Georgia,
+          serif;
+      }
+      h2 {
+        font-size: 22px;
+        font-weight: 650;
+        margin: 10px 0 0;
+        letter-spacing: -0.4px;
+      }
+      .handle {
+        font-size: 12px;
+        color: #8a948d;
+        margin-top: 1px;
+      }
+      .bio {
+        color: #627067;
+        font-size: 13px;
+        margin: 12px 0 20px;
+      }
+      .profile-footer {
+        border-top: 1px solid #edf0eb;
+        padding: 12px 25px;
+        display: flex;
+        justify-content: space-between;
+        color: #8a948d;
+        font-size: 11px;
+      }
+      .profile-footer strong {
+        color: #65796a;
+        font-weight: 550;
+      }
+      aside {
+        padding: 8px 0 8px 10px;
+      }
+      aside h3 {
+        font-size: 18px;
+        font-weight: 600;
+        margin: 0 0 10px;
+      }
+      aside p {
+        max-width: 340px;
+        color: #6b776e;
+        font-size: 13px;
+      }
+      .code {
+        padding: 18px 20px;
+        margin-top: 22px;
+        background: #203b2e;
+        border-radius: 10px;
+        color: #e0eddc;
+        font:
+          11px/1.8 ui-monospace,
+          monospace;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+      .code small {
+        color: #98b6a0;
+        font-size: 10px;
+      }
+      .states {
+        margin-top: 32px;
+      }
+      .states-title {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        margin-bottom: 12px;
+      }
+      .states-title h3 {
+        font-size: 14px;
+        font-weight: 600;
+        margin: 0;
+      }
+      .states-title span {
+        font-size: 11px;
+        color: #8a948d;
+      }
+      .state-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr;
+        gap: 12px;
+      }
+      .state {
+        background: #eef1eb;
+        padding: 16px 12px;
+        border-radius: 10px;
+        min-width: 0;
+      }
+      .state .eyebrow {
+        display: block;
+        margin: 0 0 10px 3px;
+      }
+      .notice {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        margin-top: 26px;
+        color: #8b846a;
+        font-size: 11px;
+      }
+      .notice strong {
+        font-weight: 600;
+        color: #787255;
+      }
+      @media (max-width: 760px) {
+        .stage,
+        .state-grid {
+          grid-template-columns: 1fr;
+        }
+        aside {
+          padding: 10px 0;
+        }
+        .nav-item {
+          display: none;
+        }
+        main {
+          padding: 24px 18px;
+        }
+        h1 {
+          font-size: 28px;
+        }
+        .states-title span {
+          display: none;
+        }
+      }
+    </style>
+    <script src="/assets/verity.js" defer></script>
+  </head>
+  <body>
+    <header>
+      <nav>
+        <div class="brand"><b>J</b> JoeSite</div>
+        <span class="nav-item">Community</span><span class="nav-item">Members</span
+        ><span class="preview-tag">VERITY / COMPONENT PREVIEW</span>
+      </nav>
+    </header>
+    <main>
+      <div class="eyebrow">Default badge · v0</div>
+      <h1>Verification, on your profile.</h1>
+      <p class="intro">Verity mark, GitHub logo, and @handle. One compact link to the evidence.</p>
+      <div class="stage">
+        <article class="profile">
+          <div class="cover"></div>
+          <div class="profile-content">
+            <div class="avatar">J</div>
+            <h2>Joe Marshall</h2>
+            <div class="handle">@joe · Member since 2024</div>
+            <p class="bio">
+              Building little things for the web.<br />Usually somewhere in the open-source threads.
+            </p>
+            <verity-badge backend-url="/api/verity" connection-id="current"></verity-badge>
+          </div>
+          <div class="profile-footer">
+            <span>12 discussions · 48 replies</span><strong>Community member</strong>
+          </div>
+        </article>
+        <aside>
+          <h3>Small badge. Inspectable evidence.</h3>
+          <p>Click anywhere on the badge to open verification details for @Joe in a modal.</p>
+          <p>
+            Styling is included in Verity and isolated from JoeSite’s page CSS. No separate
+            stylesheet is needed.
+          </p>
+          <pre class="code"><code>&lt;verity-badge
+  backend-url="/api/verity"
+  connection-id="…"&gt;
+&lt;/verity-badge&gt;</code></pre>
+        </aside>
+      </div>
+      <section class="states">
+        <div class="states-title">
+          <h3>Other badge states</h3>
+          <span>Status updates automatically</span>
+        </div>
+        <div class="state-grid">
+          <div class="state">
+            <span class="eyebrow">Expired</span
+            ><verity-badge backend-url="/api/verity" connection-id="expired"></verity-badge>
+          </div>
+          <div class="state">
+            <span class="eyebrow">Revoked</span
+            ><verity-badge backend-url="/api/verity" connection-id="revoked"></verity-badge>
+          </div>
+          <div class="state">
+            <span class="eyebrow">Unavailable</span
+            ><verity-badge backend-url="/api/verity" connection-id="missing"></verity-badge>
+          </div>
+        </div>
+      </section>
+      <div class="notice">
+        <strong>Demo — simulated verification.</strong> Fictional accounts; actual Verity
+        components.
+      </div>
+    </main>
+  </body>
+</html>

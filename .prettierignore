@@ -1,0 +1,8 @@
+**/dist/
+node_modules/
+example/node_modules/
+package-lock.json
+*-prototype-plan.md
+.agents/
+.codex/
+.wrangler/
