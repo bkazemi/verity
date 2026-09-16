@@ -8,7 +8,7 @@ export type LocalKind = 'account' | 'page' | 'site';
 /** id is private and must never be reassigned. reference is durable and public-safe. */
 export interface LocalAccount {
   id: string;
-  /** Defaults to 'account'. Renderers use it to name the linked thing. */
+  /** Absent means the site did not say. Renderers must not assume an account. */
   kind?: LocalKind;
   label: string;
   reference: string;
@@ -41,7 +41,7 @@ export interface Flow {
   stateHash: string;
   bindingHash: string;
   verifier?: string;
-  kind: 'connect' | 'revoke' | 'visibility' | 'share-revoke';
+  kind: 'connect' | 'renew' | 'revoke' | 'visibility' | 'share-revoke';
   local?: LocalAccount;
   connectionId?: string;
   phase: 'pending' | 'exchanging' | 'approval' | 'complete' | 'cancelled' | 'failed';

@@ -59,7 +59,7 @@ const server = createServer((request, response) => {
 
   if (url.pathname === '/demo') {
     response.end(
-      '<h1>Demo — simulated verification</h1><p>This preview uses fixtures. Run the full example with GitHub credentials for real verification.</p><a href="/">Back to preview</a>',
+      '<h1>Demo: simulated verification</h1><p>This preview uses fixtures. Run the full example with GitHub credentials for real verification.</p><a href="/">Back to preview</a>',
     );
 
     return;

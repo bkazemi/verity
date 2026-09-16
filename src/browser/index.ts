@@ -93,6 +93,15 @@ export function init({ backendUrl }: { backendUrl: string }) {
         throw error;
       }
     },
+    /** The site's current public connections, so an embed need not hardcode ids. */
+    async listPublished(): Promise<Evidence[]> {
+      const data = await request('/published');
+
+      if (!Array.isArray(data) || !data.every(validEvidence))
+        throw new Error('Invalid evidence response');
+
+      return data;
+    },
     async getConnection(id: string): Promise<Evidence> {
       const data = await request(`/connections/${encodeURIComponent(id)}?format=json`);
 

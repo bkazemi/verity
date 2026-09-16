@@ -116,7 +116,7 @@ export class VerityService {
         if (
           !connection ||
           connection.revokedAt !== undefined ||
-          (kind === 'visibility' && connection.local.id !== local?.id)
+          (['visibility', 'renew'].includes(kind) && connection.local.id !== local?.id)
         )
           throw new Unavailable();
       }
@@ -276,9 +276,21 @@ export class VerityService {
           throw new Unavailable();
 
         connection = existing;
-        await this.invalidateShare(tx, connection.id);
 
-        if (flow.kind === 'revoke') {
+        if (flow.kind !== 'renew') await this.invalidateShare(tx, connection.id);
+
+        if (flow.kind === 'renew') {
+          // Re-approval of the same pair extends the record rather than minting a new
+          // id, so embeds and evidence urls published earlier keep resolving. The
+          // subject snapshot refreshes because the holder just approved what it shows.
+          if (flow.local!.id !== existing.local.id) throw new Unavailable();
+
+          connection.local = flow.local!;
+          connection.authenticatedAt = flow.authenticatedAt!;
+          connection.approvedAt = this.now();
+          connection.expiresAt = this.now() + (this.options.validityMs ?? 30 * 86400000);
+          connection.revocationReason = undefined;
+        } else if (flow.kind === 'revoke') {
           connection.revokedAt = this.now();
           connection.revocationReason = 'external';
         } else if (flow.kind === 'visibility') {
@@ -342,6 +354,21 @@ export class VerityService {
 
       return this.evidence(connection);
     });
+  }
+
+  /**
+   * Every connection this site has published. Public evidence is already world-readable
+   * one id at a time; listing it lets an embed follow the current connections instead of
+   * hardcoding an id that dies whenever one is revoked and replaced. Unlisted records are
+   * never included: they must not appear in any directory listing.
+   */
+  async published(): Promise<Evidence[]> {
+    return this.options.storage.transaction(async (tx) =>
+      (await tx.list('connections'))
+        .filter((c) => c.visibility === 'public')
+        .map((c) => this.evidence(c))
+        .filter((e) => e.status === 'verified'),
+    );
   }
 
   async mine(local: LocalAccount): Promise<Evidence[]> {

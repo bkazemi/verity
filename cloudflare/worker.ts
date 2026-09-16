@@ -3,11 +3,14 @@ import type { Evidence } from '../src/core/index.js';
 import { createVerity, githubProvider } from '../src/server/index.js';
 import { CloudflareStorage } from './storage.js';
 import { OwnerAuth } from './auth.js';
+import type { LocalKind } from '../src/core/index.js';
 
 export interface Env {
   VERITY: DurableObjectNamespace;
   PUBLIC_ORIGIN: string;
   SITE_NAME: string;
+  /** What this deployment links: one of its accounts, a page, or the site. Defaults to account. */
+  OWNER_KIND?: LocalKind;
   OWNER_LABEL: string;
   OWNER_REFERENCE: string;
   OWNER_PROFILE_URL: string;
@@ -127,6 +130,8 @@ export class VerityStore {
 
     this.local = {
       id: 'site-owner',
+      // A site with no user accounts must not have its subject described as one.
+      kind: env.OWNER_KIND,
       label: env.OWNER_LABEL,
       reference: env.OWNER_REFERENCE,
       profileUrl: env.OWNER_PROFILE_URL,
@@ -142,7 +147,8 @@ export class VerityStore {
       siteName: env.SITE_NAME,
       // The verifier is the origin that ran the flow and serves the evidence, which a
       // reader can check. It is not SITE_NAME: that host is claimed, not demonstrated.
-      verifierName: `${origin.host} (self-hosted Verity)`,
+      // The host alone: how the backend is operated is not something a reader verifies.
+      verifierName: origin.host,
       profileOrigins: [new URL(env.OWNER_PROFILE_URL).origin],
       reportUrl: env.REPORT_URL,
       authenticate: async (request) =>
@@ -232,7 +238,7 @@ export class VerityStore {
     return html(`<h2>${escape(this.local.label)}</h2>
       <p>Local account: ${escape(this.local.reference)}</p>
       <p><a href="/api/verity/verify">Verify with GitHub or renew a connection</a></p>
-      <p>Approve a public connection to display it on your site. Renewal creates a new connection; update your embed and revoke the old record.</p>
+      <p>Approve a public connection to display it on your site. Renew an existing one to extend it in place; only a new pair needs a new connection.</p>
       ${connections.map((e) => this.connection(e)).join('')}
       <form action="/logout" method="post"><button>Sign out</button></form>`);
   }
@@ -240,9 +246,10 @@ export class VerityStore {
   private connection(e: Evidence) {
     const embed = `<script src="/assets/verity.js" defer></script>\n<verity-badge backend-url="${this.env.PUBLIC_ORIGIN}/api/verity" connection-id="${e.id}"></verity-badge>`;
 
-    return `<section><h3>${escape(e.external.handle)} — ${escape(e.status)}</h3>
+    return `<section><h3>${escape(e.external.handle)}: ${escape(e.status)}</h3>
       <p>Visibility: ${escape(e.visibility)}. Expires: ${escape(new Date(e.expiresAt).toISOString())}</p>
       ${e.visibility === 'public' ? `<p><a href="${escape(e.evidenceUrl)}">Inspect evidence</a></p><label>Embed on your site<textarea readonly rows="4" cols="80">${escape(embed)}</textarea></label>` : '<p>Unlisted connections cannot appear in a public pill.</p>'}
+      <p><a href="/api/verity/renew/${escape(e.id)}">Renew this connection</a>. Keeps the same connection ID, so embeds stay valid.</p>
       <p><a href="/api/verity/visibility/${escape(e.id)}">Change visibility</a></p>
       <form action="/api/verity/connections/${escape(e.id)}/disconnect" method="post"><button>Revoke connection</button></form></section>`;
   }

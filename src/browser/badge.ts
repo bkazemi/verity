@@ -88,10 +88,11 @@ export function renderBadge(element: HTMLElement, evidence: Evidence): HTMLAncho
 
   badge.setAttribute(
     'aria-label',
-    `${provider} ${handle}: ${label} | Verifier: ${evidence.verifierName} | inspect verification`,
+    `${provider} ${handle}: ${label} | via: ${evidence.verifierName} | inspect verification`,
   );
 
-  badge.title = `${label} | Verifier: ${evidence.verifierName} | Inspect verification for ${evidence.local.label} (${evidence.local.reference}) and ${provider} ${handle}`;
+  // The provider and handle are already visible in the pill itself.
+  badge.title = `${label} | via: ${evidence.verifierName} | Inspect verification for ${evidence.local.label}`;
   const divider = span('divider', '');
 
   divider.setAttribute('aria-hidden', 'true');

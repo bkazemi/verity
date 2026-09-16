@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import type { Evidence, LocalAccount } from '../core/index.js';
+import type { Evidence, Flow, LocalAccount } from '../core/index.js';
 import { VerityService, Unavailable, type ServiceOptions } from './service.js';
 
 export { VerityService, Unavailable } from './service.js';
@@ -50,12 +50,15 @@ const redirect = (url: string, cookie?: string) =>
   });
 
 function account(label: string, reference: string, url?: string) {
-  return `${escape(label)} — ${url ? `<a href="${escape(url)}" rel="noreferrer">${escape(reference)}</a>` : escape(reference)}`;
+  return `${escape(label)}, ${url ? `<a href="${escape(url)}" rel="noreferrer">${escape(reference)}</a>` : escape(reference)}`;
 }
 
-/** A link's local side is one of the site's accounts, a page, or the site itself. */
-function subjectNoun(kind: string | undefined): string {
-  return { account: 'account', page: 'page', site: 'website' }[kind ?? 'account'] ?? 'account';
+/**
+ * A link's local side is one of the site's accounts, a page, or the site itself.
+ * An absent kind means the site did not say, so nothing is asserted about it.
+ */
+function subjectNoun(kind: string | undefined): string | undefined {
+  return { account: 'account', page: 'page', site: 'website' }[kind ?? ''];
 }
 
 function evidencePage(e: Evidence & { linkExpiresAt?: number }, base: string, report: string) {
@@ -64,8 +67,8 @@ function evidencePage(e: Evidence & { linkExpiresAt?: number }, base: string, re
     `
     <p>${escape(e.siteName)}: ${account(e.local.label, e.local.reference, e.local.profileUrl)}</p>
     <p>${escape(e.providerName ?? e.provider)}: ${account(e.external.handle, e.external.id, e.external.profileUrl)}</p>
-    <p>The controller of this external account authenticated through ${escape(e.providerName ?? e.provider)} and authorized this exact link.
-    ${escape(e.siteName)} supplied the ${escape(subjectNoun(e.local.kind))} it names. Verified via ${escape(e.verifierName)}.</p>
+    <p>The external account holder proved control of it with ${escape(e.providerName ?? e.provider)} and authorized this exact link.
+    What it links to is ${escape(e.siteName)}'s own claim, which ${escape(e.verifierName)} does not check.</p>
     <p>Provider authentication: ${escape(new Date(e.authenticatedAt).toISOString())}. Approval: ${escape(new Date(e.approvedAt).toISOString())}.</p>
     <p>Status: ${escape(e.status)}. Verification expiry: ${escape(new Date(e.expiresAt).toISOString())}.</p>
     ${e.linkExpiresAt ? `<p>Anyone with this link can view and forward it. Link expiry: ${escape(new Date(e.linkExpiresAt).toISOString())}.</p>` : ''}
@@ -166,7 +169,8 @@ export function createVerity(options: ServerOptions) {
           path === '/verify' ||
           path.startsWith('/external-revoke/') ||
           path.startsWith('/external-share-revoke/') ||
-          path.startsWith('/visibility/')
+          path.startsWith('/visibility/') ||
+          path.startsWith('/renew/')
         ) {
           const external =
             path.startsWith('/external-revoke/') || path.startsWith('/external-share-revoke/');
@@ -177,17 +181,23 @@ export function createVerity(options: ServerOptions) {
               : 'revoke'
             : path.startsWith('/visibility/')
               ? 'visibility'
-              : 'connect';
+              : path.startsWith('/renew/')
+                ? 'renew'
+                : 'connect';
 
           const user = external ? undefined : await local(request);
           const id = kind === 'connect' ? '' : path.split('/').at(-1)!;
 
           return html(
             page(
-              external ? 'Remove a connection' : `Verify with ${options.provider.name}`,
+              external
+                ? 'Remove a connection'
+                : kind === 'renew'
+                  ? 'Renew this connection'
+                  : `Verify with ${options.provider.name}`,
               `
             ${user ? `<p>${escape(options.siteName)}: ${account(user.label, user.reference, user.profileUrl)}</p>` : '<p>Authenticate with the matching external account to review and remove this link.</p>'}
-            <p>Confirm the connection between this ${user ? escape(subjectNoun(user.kind)) : 'site'} and your ${escape(options.provider.name)} account.</p>
+            <p>Confirm the connection between this ${escape(subjectNoun(user?.kind) ?? 'site')} and your ${escape(options.provider.name)} account.</p>
             <form method="${kind === 'connect' ? 'get' : 'post'}" action="${escape(prefix)}/sessions"><input type="hidden" name="kind" value="${kind}"><input type="hidden" name="connectionId" value="${escape(id)}"><button>Continue with ${escape(options.provider.name)}</button></form>`,
             ),
           );
@@ -229,17 +239,28 @@ export function createVerity(options: ServerOptions) {
             page(
               ['revoke', 'share-revoke'].includes(flow.kind)
                 ? 'Remove connection'
-                : 'Confirm connection',
+                : flow.kind === 'renew'
+                  ? 'Renew connection'
+                  : 'Confirm connection',
               `
             <p>${escape(options.siteName)}: ${account(flow.local!.label, flow.local!.reference, flow.local!.profileUrl)}</p>
             <p>${escape(options.provider.name)}: ${account(flow.external!.handle, flow.external!.id, flow.external!.profileUrl)}</p>
             <p>${escape(options.siteName)} receives the result. Verified via ${escape(options.verifierName)}.</p>
             <form method="post" action="${escape(prefix)}/flows/${escape(flow.id)}/approve">
-            ${['revoke', 'share-revoke'].includes(flow.kind) ? '<input type="hidden" name="visibility" value="unlisted">' : '<fieldset><legend>Evidence visibility</legend><label><input type="radio" name="visibility" value="unlisted" checked>Unlisted</label><p>Anyone with a sharing link can view and forward it. No link is created until you choose to share.</p><label><input type="radio" name="visibility" value="public">Public — anyone can view both sides of this link</label></fieldset>'}
-            <button name="action" value="approve">${['revoke', 'share-revoke'].includes(flow.kind) ? (flow.kind === 'share-revoke' ? 'Revoke sharing link' : 'Revoke connection') : 'Confirm connection'}</button>
+            ${['revoke', 'share-revoke', 'renew'].includes(flow.kind) ? '<input type="hidden" name="visibility" value="unlisted">' : '<fieldset><legend>Evidence visibility</legend><label><input type="radio" name="visibility" value="unlisted" checked>Unlisted</label><p>Anyone with a sharing link can view and forward it. No link is created until you choose to share.</p><label><input type="radio" name="visibility" value="public">Public: anyone can view both sides of this link</label></fieldset>'}
+            <button name="action" value="approve">${['revoke', 'share-revoke'].includes(flow.kind) ? (flow.kind === 'share-revoke' ? 'Revoke sharing link' : 'Revoke connection') : flow.kind === 'renew' ? 'Renew connection' : 'Confirm connection'}</button>
             <button name="action" value="cancel">Cancel</button></form><p><a href="${escape(prefix)}/verify">Use a different external account</a></p>`,
             ),
           );
+        }
+
+        // Lets a static embed track current connections without hardcoding an id.
+        if (path === '/published') {
+          const response = json(await service.published());
+
+          response.headers.set('Access-Control-Allow-Origin', '*');
+
+          return response;
         }
 
         if (path === '/mine') return json(await service.mine(await local(request)));
@@ -283,10 +304,12 @@ export function createVerity(options: ServerOptions) {
         }
 
         if (path === '/sessions') {
-          if (!['connect', 'revoke', 'visibility', 'share-revoke'].includes(data.kind ?? ''))
+          if (
+            !['connect', 'renew', 'revoke', 'visibility', 'share-revoke'].includes(data.kind ?? '')
+          )
             throw new Unavailable();
 
-          const kind = data.kind as 'connect' | 'revoke' | 'visibility' | 'share-revoke';
+          const kind = data.kind as Flow['kind'];
 
           const flow = await service.start(
             ['revoke', 'share-revoke'].includes(kind) ? undefined : await local(request),

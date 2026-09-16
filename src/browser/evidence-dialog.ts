@@ -15,7 +15,6 @@ const styles = `
   a { color: #245f43; text-underline-offset: 3px; overflow-wrap: anywhere; }
   a:focus-visible, button:focus-visible { outline: 2px solid #357ce5; outline-offset: 3px; }
   .summary { display: flex; align-items: center; gap: 8px; margin-top: 16px; }
-  .context { margin: -8px 0 18px; }
   .mark { width: 24px; height: 24px; flex-shrink: 0; }
   .provider { width: 14px; height: 14px; }
   .state { font-size: 14px; font-weight: 650; line-height: 1.4; }
@@ -23,6 +22,8 @@ const styles = `
   .account { padding: 14px 16px; border: 1px solid #e0e6df; border-radius: 10px; margin-top: 12px; }
   .account h3 { display: flex; align-items: center; gap: 6px; margin: 0 0 3px; color: #6b786f; font-size: 11px; font-weight: 550; }
   .account a, .account strong { font-weight: 650; font-size: 14px; }
+  .reference { margin-top: 2px; }
+  .joiner { display: block; width: 20px; height: 20px; margin: 8px auto -4px; color: #90a096; }
   dl { margin: 16px 0 0; padding-top: 12px; border-top: 1px solid #e5e9e3; display: grid; grid-template-columns: auto 1fr; gap: 5px 16px; font-size: 11px; }
   dt { color: #6b786f; }
   dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
@@ -38,23 +39,92 @@ function node<K extends keyof HTMLElementTagNameMap>(tag: K, text = '', classNam
   return element;
 }
 
-/** A link's local side is one of the site's accounts, a page, or the site itself. */
-function subjectNoun(kind: string | undefined): string {
-  return { account: 'account', page: 'page', site: 'website' }[kind ?? 'account'] ?? 'account';
+/** Joins the two cards: the link itself, drawn rather than described. */
+function linkMark(): SVGSVGElement {
+  const namespace = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(namespace, 'svg');
+
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('class', 'joiner');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.setAttribute('focusable', 'false');
+
+  for (const d of [
+    'M10.5 7.5 13 5a4.95 4.95 0 0 1 7 7l-2.5 2.5',
+    'M13.5 16.5 11 19a4.95 4.95 0 0 1-7-7l2.5-2.5',
+    'M9 15l6-6',
+  ]) {
+    const path = document.createElementNS(namespace, 'path');
+
+    path.setAttribute('d', d);
+    path.setAttribute('stroke', 'currentColor');
+    path.setAttribute('stroke-width', '2');
+    path.setAttribute('stroke-linecap', 'round');
+    svg.append(path);
+  }
+
+  return svg;
+}
+
+/**
+ * The heading and value for the local card. When the site itself is what was linked
+ * there is no subject on it to name, so the site is the value and not a label above
+ * some other thing. An absent kind means the site did not say, so nothing is assumed.
+ */
+function localSide(evidence: Evidence): { heading: string; value: string } {
+  const { kind } = evidence.local;
+
+  if (kind === 'site') return { heading: 'Website', value: evidence.siteName };
+
+  const heading: Record<string, string> = {
+    account: `Account on ${evidence.siteName}`,
+    page: `Page on ${evidence.siteName}`,
+  };
+
+  return { heading: heading[kind ?? ''] ?? evidence.siteName, value: evidence.local.label };
+}
+
+/**
+ * Both sides of a link render as the same card, so a reader can see it is a pair.
+ * `extra` carries evidence belonging to that side alone: a provider authenticates and
+ * expires on its own terms, and a second provider on the same subject would differ.
+ */
+function accountCard(
+  heading: Node[],
+  name: string,
+  reference: string | undefined,
+  url?: string,
+  ...extra: HTMLElement[]
+) {
+  const card = node('section', '', 'account');
+  const title = node('h3');
+  const value = node(url ? 'a' : 'strong', name);
+
+  title.append(...heading);
+
+  if (value instanceof HTMLAnchorElement) {
+    value.href = url!;
+    value.rel = 'noreferrer';
+  }
+
+  card.append(title, value);
+
+  if (reference) card.append(node('div', reference, 'muted reference'));
+
+  card.append(...extra);
+
+  return card;
 }
 
 function render(content: HTMLElement, evidence: Evidence) {
   const current = evidence.status === 'verified' && evidence.expiresAt > Date.now();
   const status = current ? 'Verified' : evidence.status === 'revoked' ? 'Revoked' : 'Expired';
   const provider = evidence.providerName ?? evidence.provider;
-  const subject = subjectNoun(evidence.local.kind);
   const summary = node('div', '', 'summary');
   const copy = node('div');
 
-  copy.append(
-    node('div', status, 'state'),
-    node('div', `Verifier: ${evidence.verifierName}`, 'muted'),
-  );
+  copy.append(node('div', status, 'state'), node('div', `via: ${evidence.verifierName}`, 'muted'));
 
   summary.append(verificationMark(!current), copy);
   const dates = node('dl');
@@ -70,38 +140,40 @@ function render(content: HTMLElement, evidence: Evidence) {
     dates.append(node('dt', label), node('dd', new Date(time).toLocaleString()));
   }
 
-  // The account card above already names the provider; this stays provider-neutral.
+  // Names neither the provider nor a kind of local subject: both vary, and a link
+  // whose site never declared what it linked must not be described as an account.
   const explanation = node(
     'p',
-    `The holder of the external account authenticated with its provider and approved this specific link. ${evidence.siteName} supplied the ${subject} it names.`,
+    `The external account holder proved control of it with their provider and approved this exact link. What it links to is ${evidence.siteName}'s own claim, which this verifier does not check.`,
     'muted explanation',
   );
 
-  const context = node('p', '', 'muted context');
-  const local = node(evidence.local.profileUrl ? 'a' : 'strong', evidence.local.label);
+  // Each card says what it is. Without that the pair is two unlabelled boxes.
+  const local = localSide(evidence);
 
-  if (local instanceof HTMLAnchorElement) {
-    local.href = evidence.local.profileUrl!;
-    local.rel = 'noreferrer';
-  }
-
-  context.append('For ', local, ` on ${evidence.siteName}`);
-  const card = node('section', '', 'account');
-  const providerHeading = node('h3');
-  const handle = node('a', `@${evidence.external.handle.replace(/^@/, '')}`);
-
-  providerHeading.append(
-    providerMark(evidence.provider, provider),
-    document.createTextNode(provider),
+  const localCard = accountCard(
+    [document.createTextNode(local.heading)],
+    local.value,
+    // The heading names the site and the label names the subject, so the site's own
+    // reference adds a third line saying the same thing. The provider id on the other
+    // card stays: that one is the provider's identifier, not the site's own wording.
+    undefined,
+    evidence.local.profileUrl,
   );
 
-  handle.href = evidence.external.profileUrl;
-  handle.rel = 'noreferrer';
-  card.append(providerHeading, handle, summary, dates);
+  const externalCard = accountCard(
+    [providerMark(evidence.provider, provider), document.createTextNode(provider)],
+    `@${evidence.external.handle.replace(/^@/, '')}`,
+    evidence.external.id,
+    evidence.external.profileUrl,
+    summary,
+    dates,
+  );
 
   content.replaceChildren(
-    context,
-    card,
+    localCard,
+    linkMark(),
+    externalCard,
     explanation,
     node(
       'p',

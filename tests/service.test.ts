@@ -272,3 +272,75 @@ test('maintenance removes expired flow secrets and history after retention', asy
   await assert.rejects(f.service.read(id));
   assert.equal((await f.storage.transaction((tx) => tx.list('audit'))).length, 0);
 });
+
+test('renewal extends the same record, so published embeds and evidence urls survive', async () => {
+  const f = fixture(),
+    { id } = await f.connect();
+
+  const before = await f.service.read(id, alice);
+  const token = (await f.service.share(id, alice))!.url.split('/').at(-1)!;
+
+  // Only the subject's owner may start a renewal.
+  await assert.rejects(f.service.start(bob, id, 'renew'));
+  f.advance(600);
+
+  const flow = await f.service.start(alice, id, 'renew');
+
+  // Fresh provider authentication is still required before approval.
+  await assert.rejects(f.service.approve(flow.flowId, flow.binding, alice, 'public'));
+
+  await f.service.callback(
+    new URL(flow.authorizationUrl).searchParams.get('state')!,
+    flow.binding,
+    'code',
+  );
+
+  // Approving with 'public' must not broaden an unlisted link: that needs its own flow.
+  const renewed = await f.service.approve(flow.flowId, flow.binding, alice, 'public');
+
+  assert.equal(renewed, id, 'the connection id is unchanged');
+
+  const after = await f.service.read(id, alice);
+
+  assert.equal(after.visibility, 'unlisted');
+  assert.equal(after.visibilityApprovedAt, before.visibilityApprovedAt);
+
+  assert.ok(after.expiresAt > before.expiresAt, 'validity is extended');
+  assert.ok(after.approvedAt > before.approvedAt);
+  assert.equal(after.status, 'verified');
+  assert.equal(after.evidenceUrl, before.evidenceUrl, 'published evidence urls still resolve');
+
+  // Link expiry is independent of verification expiry, so the share survives.
+  assert.equal((await f.service.shared(token)).id, id);
+
+  // A revoked connection cannot be brought back by renewing it.
+  await f.service.revoke(id, alice);
+  await assert.rejects(f.service.start(alice, id, 'renew'));
+});
+
+test('published evidence lists only current public connections, never unlisted or dead ones', async () => {
+  const f = fixture(),
+    unlisted = await f.connect(),
+    shown = await f.connect('public'),
+    dropped = await f.connect('public');
+
+  assert.deepEqual(
+    (await f.service.published()).map((e) => e.id).sort(),
+    [shown.id, dropped.id].sort(),
+  );
+
+  // A revoked connection leaves the listing, so an embed following it stops showing it.
+  await f.service.revoke(dropped.id, alice);
+
+  assert.deepEqual(
+    (await f.service.published()).map((e) => e.id),
+    [shown.id],
+  );
+
+  // Unlisted records must not appear in any directory listing.
+  assert.ok(!(await f.service.published()).some((e) => e.id === unlisted.id));
+
+  // Expiry removes it too: the listing is current connections, not history.
+  f.advance(2000);
+  assert.deepEqual(await f.service.published(), []);
+});

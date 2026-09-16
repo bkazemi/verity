@@ -56,7 +56,7 @@ const verity = createVerity({
   }),
   baseUrl: `${origin}/api/verity`,
   siteName: 'Example Community',
-  verifierName: 'Example Community (self-hosted Verity)',
+  verifierName: 'verity.example.com',
   profileOrigins: [origin],
   authenticate,
   reportUrl: `${origin}/report`,
@@ -173,7 +173,7 @@ async function handle(request: Request) {
       '<h2>Sign in to the example local account</h2><p>This password belongs to the example site, not GitHub.</p><form method="post" action="/login"><label>Example password <input type="password" name="password" autocomplete="current-password" required></label><button>Sign in</button></form>',
     );
 
-  return html(`<h2>Account settings — Alex Example</h2><p>Confirm the connection between this account and your GitHub account.</p>
+  return html(`<h2>Account settings: Alex Example</h2><p>Confirm the connection between this account and your GitHub account.</p>
     <button id="verify">Verify with GitHub</button><p><a href="/api/verity/verify">Verify using the full-page flow</a></p><p id="message" role="status"></p><section id="connections"></section>
     <script src="/assets/verity.js" defer></script><script src="/assets/ui.js" defer></script>`);
 }

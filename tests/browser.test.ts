@@ -12,6 +12,10 @@ class Element {
   shadowRoot?: Element;
   tagName = '';
   attributes: Record<string, string> = {};
+  listeners: Record<string, ((event: unknown) => unknown)[]> = {};
+  id = '';
+  type = '';
+  open = false;
 
   find(tag: string): Element[] {
     return [
@@ -21,7 +25,28 @@ class Element {
     ];
   }
 
-  addEventListener() {}
+  addEventListener(type: string, handler: (event: unknown) => unknown) {
+    (this.listeners[type] ??= []).push(handler);
+  }
+
+  removeEventListener() {}
+
+  showModal() {
+    this.open = true;
+  }
+
+  close() {
+    this.open = false;
+  }
+
+  focus() {}
+
+  remove() {}
+
+  /** Every element under this one, including through shadow roots. */
+  all(): Element[] {
+    return [this, ...this.children.flatMap((c) => c.all()), ...(this.shadowRoot?.all() ?? [])];
+  }
 
   attachShadow() {
     this.shadowRoot = new Element();
@@ -131,7 +156,7 @@ test('distributed badge renders current/expired/revoked evidence and fails close
 
   assert.match(
     element.links()[0]!.attributes['aria-label']!,
-    /GitHub @<Alice>: Verified \| Verifier: Self-hosted Example/,
+    /GitHub @<Alice>: Verified \| via: Self-hosted Example/,
   );
 
   assert.equal(element.links().length, 1);
@@ -202,4 +227,121 @@ test('distributed badge renders current/expired/revoked evidence and fails close
     assert.ok(!element.textContent.includes('<Alice>'));
     evidence = previous;
   }
+});
+
+test('the evidence dialog presents both sides of a link as parallel cards', async () => {
+  const asset = await readFile(new URL('../dist/verity.js', import.meta.url), 'utf8');
+
+  const evidence = {
+    id: 'c1',
+    provider: 'github',
+    providerName: 'GitHub',
+    siteName: 'site.test',
+    verifierName: 'verifier.test (self-hosted Verity)',
+    local: {
+      label: 'Alice',
+      reference: 'site.test author',
+      profileUrl: 'https://site.test/about/',
+    },
+    external: { id: '11813054', handle: 'alice', profileUrl: 'https://github.com/alice' },
+    evidenceUrl: 'https://verifier.test/api/verity/connections/c1',
+    status: 'verified',
+    visibility: 'public',
+    authenticatedAt: 1,
+    approvedAt: 1,
+    expiresAt: Date.now() + 60000,
+  };
+
+  const body = new Element();
+
+  const context = vm.createContext({
+    URL,
+    Date,
+    setTimeout,
+    clearTimeout,
+    setInterval: () => 0,
+    clearInterval: () => {},
+    CSSStyleSheet: class {
+      replaceSync() {}
+    },
+    // The renderer branches on these, so the stub must satisfy instanceof.
+    HTMLElement: { [Symbol.hasInstance]: (value: unknown) => value instanceof Element },
+    HTMLAnchorElement: {
+      [Symbol.hasInstance]: (value: unknown) => (value as Element)?.tagName === 'a',
+    },
+    HTMLDialogElement: {
+      [Symbol.hasInstance]: (value: unknown) => (value as Element)?.tagName === 'dialog',
+    },
+    location: { href: 'https://site.test/profile', origin: 'https://site.test' },
+    document: {
+      body,
+      createElementNS: (_namespace: string, tag: string) => {
+        const element = new Element();
+
+        element.tagName = tag;
+
+        return element;
+      },
+      createElement: (tag: string) => {
+        const element = new Element();
+
+        element.tagName = tag;
+
+        return element;
+      },
+      createTextNode: (text: string) => {
+        const element = new Element();
+
+        element.textContent = text;
+
+        return element;
+      },
+    },
+    fetch: async () => ({ ok: true, json: async () => evidence }),
+  });
+
+  vm.runInContext(asset, context);
+
+  const client = context.Verity.init({ backendUrl: 'https://verifier.test/api/verity' }) as {
+    mountBadge(element: Element, options: { connectionId: string }): Promise<void>;
+  };
+
+  const host = new Element();
+
+  await client.mountBadge(host, { connectionId: 'c1' });
+
+  const pill = host.links()[0]!;
+  const open = pill.listeners['click']?.[0];
+
+  assert.ok(open, 'the badge opens the dialog on click');
+  await open({ button: 0, preventDefault() {} });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const dialog = body.all().find((element) => element.tagName === 'dialog')!;
+
+  assert.ok(dialog, 'a dialog is attached to the document');
+
+  const cards = dialog.all().filter((element) => element.className.includes('account'));
+
+  // Both sides render as cards, so neither reads as a caption on the other.
+  assert.equal(cards.length, 2);
+
+  const [local, external] = cards as [Element, Element];
+
+  // No kind was supplied, so the card names the site and asserts nothing more.
+  assert.match(local.textContent, /site\.test/);
+  assert.ok(!local.textContent.includes('Account on'));
+  assert.match(local.textContent, /Alice/);
+  // The site's own reference would only restate the heading and label.
+  assert.ok(!local.textContent.includes('site.test author'));
+
+  assert.match(external.textContent, /GitHub/);
+  assert.match(external.textContent, /@alice/);
+  assert.match(external.textContent, /11813054/);
+
+  // The old caption assumed the local side was a person's account.
+  assert.ok(!dialog.textContent.includes('For Alice on'));
+  // The two cards are joined by a link mark, not by words.
+  assert.ok(!dialog.textContent.includes('This verification links'));
+  assert.equal(dialog.all().filter((e) => e.attributes['class'] === 'joiner').length, 1);
 });

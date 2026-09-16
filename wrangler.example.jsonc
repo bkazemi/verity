@@ -35,6 +35,8 @@
     // The site whose local subject is being linked. This is a claim the
     // evidence attributes to the site, not something the backend demonstrates.
     "SITE_NAME": "example.org",
+    // What is linked: "account", "page" or "site". Omit for an account.
+    "OWNER_KIND": "site",
     "OWNER_LABEL": "your-handle",
     "OWNER_REFERENCE": "example.org author",
     "OWNER_PROFILE_URL": "https://example.org/about/",

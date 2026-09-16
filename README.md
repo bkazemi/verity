@@ -76,7 +76,7 @@ const verity = createVerity({
   }),
   baseUrl: 'https://community.example/api/verity',
   siteName: 'Example Community',
-  verifierName: 'Example Community (self-hosted Verity)',
+  verifierName: 'verity.example.com',
   profileOrigins: ['https://community.example'],
   reportUrl: 'mailto:reports@community.example',
   authenticate: async (request) => {
