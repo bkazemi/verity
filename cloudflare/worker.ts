@@ -1,6 +1,6 @@
 import type { DurableObjectNamespace, DurableObjectState } from '@cloudflare/workers-types';
 import { externalName, localSide, statusLabel, type Evidence } from '../src/core/index.js';
-import { logo } from '../src/server/logo.js';
+import { logo } from '../src/logo.js';
 import { styleVersion } from '../src/server/style.js';
 import { createVerity, githubProvider } from '../src/server/index.js';
 import { CloudflareStorage } from './storage.js';

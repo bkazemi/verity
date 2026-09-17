@@ -13,7 +13,7 @@ import {
 } from '../core/index.js';
 import { VerityService, Unavailable, type ServiceOptions } from './service.js';
 import { copyScript } from './copy.js';
-import { logo } from './logo.js';
+import { logo } from '../logo.js';
 import { stylesheet, styleVersion } from './style.js';
 
 export { VerityService, Unavailable } from './service.js';

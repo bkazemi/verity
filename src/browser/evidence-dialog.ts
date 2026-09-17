@@ -8,6 +8,8 @@ import {
 } from '../core/index.js';
 import { verificationMark } from './mark.js';
 import { providerMark } from './provider-mark.js';
+import { verityLogo } from './logo.js';
+import { version } from '../version.js';
 
 const openDialogs = new WeakMap<HTMLElement, HTMLDialogElement>();
 
@@ -37,6 +39,8 @@ const styles = `
   dt { color: #6b786f; }
   dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
   .explanation { margin-top: 16px; }
+  footer { display: flex; align-items: center; justify-content: end; gap: 6px; margin-top: 14px; color: #9aa9a0; font-size: 11px; }
+  .logo { display: block; height: 13px; }
 `;
 
 function node<K extends keyof HTMLElementTagNameMap>(tag: K, text = '', className = '') {
@@ -240,6 +244,8 @@ export function openEvidenceDialog(opener: HTMLElement, load: () => Promise<Evid
   const heading = node('h2', 'Verification details');
   const close = node('button', '×');
   const header = node('header');
+  // What drew the record, under it. The record is about the pair, not about us.
+  const stamp = node('footer');
   const content = node('div', 'Checking verification…');
 
   heading.id = 'verity-dialog-title';
@@ -247,8 +253,9 @@ export function openEvidenceDialog(opener: HTMLElement, load: () => Promise<Evid
   close.type = 'button';
   close.setAttribute('aria-label', 'Close verification details');
   content.setAttribute('aria-live', 'polite');
+  stamp.append(verityLogo(), node('span', version));
   header.append(heading, close);
-  dialog.append(header, content);
+  dialog.append(header, content, stamp);
   root.append(dialog);
   document.body.append(host);
   openDialogs.set(opener, dialog);

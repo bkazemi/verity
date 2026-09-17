@@ -595,3 +595,10 @@ test('an account still reads as a handle, and its provider mark is still drawn',
   assert.equal(heading.textContent, 'GitHub');
   assert.equal(heading.find('svg').length, 1);
 });
+
+test('the version stamped on a record is the one the package ships', async () => {
+  const { version } = await import('../src/version.js');
+  const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+
+  assert.equal(version, `v${manifest.version.split('.')[0]}`);
+});
