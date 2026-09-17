@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import {
   status,
+  type Attestations,
   type Connection,
   type Evidence,
   type Flow,
@@ -264,6 +265,7 @@ export class VerityService {
           authenticatedAt: flow.authenticatedAt!,
           approvedAt: this.now(),
           expiresAt: this.now() + (this.options.validityMs ?? 30 * 86400000),
+          attestations: this.attestations(flow.authenticatedAt!),
         };
       } else {
         const existing = await tx.get('connections', flow.connectionId!);
@@ -290,6 +292,9 @@ export class VerityService {
           connection.approvedAt = this.now();
           connection.expiresAt = this.now() + (this.options.validityMs ?? 30 * 86400000);
           connection.revocationReason = undefined;
+          // Both sides were just re-established: the holder reauthenticated and the site
+          // reasserted the subject it displays. A visibility change re-establishes neither.
+          connection.attestations = this.attestations(flow.authenticatedAt!);
         } else if (flow.kind === 'revoke') {
           connection.revokedAt = this.now();
           connection.revocationReason = 'external';
@@ -327,6 +332,12 @@ export class VerityService {
       external: connection.external,
       provider: connection.provider,
       providerName: this.providerName(connection.provider),
+      attestations: connection.attestations ?? {
+        // Records written before methods were stored still have a known method: the site
+        // declared its subject and the provider ran the redirect flow, the only one built.
+        local: { by: 'backend', method: 'declared', confirmedAt: connection.approvedAt },
+        external: { by: 'provider', method: 'oauth', confirmedAt: connection.authenticatedAt },
+      },
       siteName: this.options.siteName,
       verifierName: this.options.verifierName,
       visibility: connection.visibility,
@@ -337,6 +348,22 @@ export class VerityService {
       expiresAt: connection.expiresAt,
       revokedAt: connection.revokedAt,
       evidenceUrl: `${this.baseUrl}/connections/${connection.id}`,
+    };
+  }
+
+  /**
+   * A link's two sides are vouched for by different parties. The site is the only authority
+   * on its own namespace, so it declares the local subject; the provider establishes the
+   * external account by whatever method its implementation uses.
+   */
+  private attestations(authenticatedAt: number): Attestations {
+    return {
+      local: { by: 'backend', method: 'declared', confirmedAt: this.now() },
+      external: {
+        by: 'provider',
+        method: this.options.provider.method ?? 'oauth',
+        confirmedAt: authenticatedAt,
+      },
     };
   }
 

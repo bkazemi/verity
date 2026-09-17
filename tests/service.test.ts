@@ -344,3 +344,72 @@ test('published evidence lists only current public connections, never unlisted o
   f.advance(2000);
   assert.deepEqual(await f.service.published(), []);
 });
+
+test('each side records how it was attested, and only re-establishing a side reconfirms it', async () => {
+  const f = fixture(),
+    { id } = await f.connect();
+
+  const initial = (await f.service.read(id, alice)).attestations!;
+
+  // The site is the only authority on its own namespace, so it declares that side.
+  assert.deepEqual(initial.local, { by: 'backend', method: 'declared', confirmedAt: 1000000 });
+
+  // The provider establishes the other side by whatever method its implementation uses,
+  // and an implementation that does not say which is the redirect flow.
+  assert.deepEqual(initial.external, { by: 'provider', method: 'oauth', confirmedAt: 1000000 });
+
+  // A visibility change re-establishes neither side, so it must not restate either.
+  f.advance(500);
+  const visibility = await f.service.start(alice, id, 'visibility');
+
+  await f.service.callback(
+    new URL(visibility.authorizationUrl).searchParams.get('state')!,
+    visibility.binding,
+    'code',
+  );
+
+  await f.service.approve(visibility.flowId, visibility.binding, alice, 'public');
+  assert.deepEqual((await f.service.read(id)).attestations, initial);
+
+  // A renewal re-establishes both: the holder reauthenticated and the site reasserted.
+  f.advance(500);
+  const renew = await f.service.start(alice, id, 'renew');
+
+  await f.service.callback(
+    new URL(renew.authorizationUrl).searchParams.get('state')!,
+    renew.binding,
+    'code',
+  );
+
+  await f.service.approve(renew.flowId, renew.binding, alice, 'public');
+  const renewed = (await f.service.read(id)).attestations!;
+
+  assert.ok(renewed.local.confirmedAt > initial.local.confirmedAt);
+  assert.ok(renewed.external.confirmedAt > initial.external.confirmedAt);
+});
+
+test('a provider naming its own method has it recorded, and older records infer theirs', async () => {
+  const f = fixture();
+
+  // One provider can be proved more than one way, so the method travels with the
+  // implementation rather than being fixed by the provider id.
+  f.provider.method = 'attestation';
+  const { id } = await f.connect('public');
+
+  assert.equal((await f.service.read(id)).attestations!.external.method, 'attestation');
+  assert.equal((await f.service.read(id)).provider, f.provider.id);
+
+  // Records stored before methods were kept still have a knowable method: the site
+  // declared its subject and the only flow ever built was the provider redirect.
+  await f.storage.transaction(async (tx) => {
+    const stored = (await tx.get('connections', id))!;
+
+    delete stored.attestations;
+    await tx.put('connections', id, stored);
+  });
+
+  const inferred = (await f.service.read(id)).attestations!;
+
+  assert.deepEqual(inferred.local, { by: 'backend', method: 'declared', confirmedAt: 1000000 });
+  assert.deepEqual(inferred.external, { by: 'provider', method: 'oauth', confirmedAt: 1000000 });
+});

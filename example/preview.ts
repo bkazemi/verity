@@ -47,6 +47,21 @@ const server = createServer((request, response) => {
       visibilityApprovedAt: Date.now() - 86400000,
       expiresAt: id === 'expired' ? Date.now() - 1000 : Date.now() + 86400000,
       evidenceUrl: `${origin}/demo`,
+      attestations: {
+        // The site is the only authority on its own namespace, so it states this side.
+        local: { by: 'backend', method: 'declared', confirmedAt: Date.now() - 86400000 },
+        // Two methods, so the preview shows both a published proof and a plain sign-in.
+        external:
+          id === 'current'
+            ? {
+                by: 'provider',
+                method: 'attestation',
+                artifactUrl: `${origin}/demo`,
+                expect: 'verity-demo-token',
+                confirmedAt: Date.now() - 3600000,
+              }
+            : { by: 'provider', method: 'oauth', confirmedAt: Date.now() - 86400000 },
+      },
     };
 
     response.setHeader('Content-Type', 'application/json');

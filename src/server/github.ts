@@ -13,6 +13,7 @@ export function githubProvider(options: {
   return {
     id: 'github',
     name: 'GitHub',
+    method: 'oauth',
     authorizationUrl({ state, challenge, redirectUri }) {
       const url = new URL('https://github.com/login/oauth/authorize');
 

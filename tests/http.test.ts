@@ -193,3 +193,46 @@ test('static sites can read public evidence across origins without gaining manag
     if (path.startsWith('/connections/')) assert.equal(result.status, 404);
   }
 });
+
+test('the evidence page names how each side was established, without ranking them', async () => {
+  const f = fixture(),
+    id = await f.connect('public');
+
+  const body = await (await f.request(`/connections/${id}`)).text();
+
+  // Each side is described next to that side, so neither reads as a note on the other.
+  assert.match(body, /Stated by Site/);
+  assert.match(body, /Signed in with GitHub/);
+  // Nothing outside a provider's own lines may name that provider.
+  assert.ok(!/GitHub[^<]*approved/.test(body));
+
+  // The old sentence assigned one method to both sides and named neither.
+  assert.ok(!body.includes('proved control of it with'));
+  assert.ok(!body.includes('does not check'));
+
+  // No artifact exists for oauth, so nothing invites the reader to open one.
+  assert.ok(!body.includes('View the proof'));
+
+  // An artifact url reaches an href only after it is confirmed http(s).
+  await f.app.service.options.storage.transaction(async (tx) => {
+    const stored = (await tx.get('connections', id))!;
+
+    stored.attestations = {
+      local: { by: 'backend', method: 'declared', confirmedAt: 1 },
+      external: {
+        by: 'provider',
+        method: 'attestation',
+        artifactUrl: 'javascript:alert(1)',
+        confirmedAt: 2,
+      },
+    };
+
+    await tx.put('connections', id, stored);
+  });
+
+  const hostile = await (await f.request(`/connections/${id}`)).text();
+
+  assert.match(hostile, /Published a proof on GitHub/);
+  assert.ok(!hostile.includes('javascript:'));
+  assert.ok(!hostile.includes('View the proof'));
+});

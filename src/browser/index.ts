@@ -174,6 +174,43 @@ function safeUrl(value: string) {
   return url.href;
 }
 
+/**
+ * Absent means an older backend, which is allowed. Present means both sides must be
+ * described, because a half-filled record would let a renderer imply a method for a side
+ * that never reported one.
+ */
+function validAttestations(value: unknown): boolean {
+  if (value === undefined) return true;
+
+  if (!record(value)) return false;
+
+  return ['local', 'external'].every((side) => {
+    const attestation = value[side];
+
+    if (!record(attestation)) return false;
+
+    return (
+      ['backend', 'provider'].includes(String(attestation.by)) &&
+      typeof attestation.method === 'string' &&
+      typeof attestation.confirmedAt === 'number' &&
+      Number.isFinite(attestation.confirmedAt) &&
+      (attestation.expect === undefined || typeof attestation.expect === 'string') &&
+      // Rendered as a link later, so only http(s) may ever reach an href.
+      (attestation.artifactUrl === undefined || httpUrl(attestation.artifactUrl))
+    );
+  });
+}
+
+function httpUrl(value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+
+  try {
+    return ['http:', 'https:'].includes(new URL(value).protocol);
+  } catch {
+    return false;
+  }
+}
+
 function validEvidence(value: unknown): value is Evidence {
   if (!record(value) || !record(value.local) || !record(value.external)) return false;
 
@@ -189,6 +226,7 @@ function validEvidence(value: unknown): value is Evidence {
     ) &&
     (value.local.profileUrl === undefined || typeof value.local.profileUrl === 'string') &&
     (value.providerName === undefined || typeof value.providerName === 'string') &&
+    validAttestations(value.attestations) &&
     (value.local.kind === undefined || typeof value.local.kind === 'string') &&
     (value.revokedAt === undefined ||
       (typeof value.revokedAt === 'number' && Number.isFinite(value.revokedAt))) &&

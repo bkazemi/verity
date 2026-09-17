@@ -22,6 +22,45 @@ export interface ExternalAccount {
   profileUrl: string;
 }
 
+/**
+ * How control of one side was shown. A provider is who an account belongs to; a method is
+ * how control of it was demonstrated, and the two multiply rather than enumerate: one
+ * provider may support several methods and one method spans providers.
+ *
+ * `declared` is the site asserting a subject from its own records. That is not a weaker
+ * form of the others: a site is the only authority on its own namespace, so no external
+ * source could improve on it. The rest publish an artifact a reader can fetch.
+ */
+export type Method = 'declared' | 'oauth' | 'attestation' | 'dns' | 'wellknown' | 'signature';
+
+/** Who vouches for one side: this backend from its own records, or the account's provider. */
+export type Attester = 'backend' | 'provider';
+
+/**
+ * How one side of a link was established. `artifactUrl` is present only when the method
+ * leaves a public proof, which is what lets a reader check the claim without trusting
+ * this backend, and lets another installation reverify it independently.
+ */
+export interface Attestation {
+  by: Attester;
+  method: Method;
+  /** Public location of the proof. Never a sharing link or any other secret. */
+  artifactUrl?: string;
+  /** What a reader should expect to find at artifactUrl, such as a challenge token. */
+  expect?: string;
+  /**
+   * When this side was last confirmed. For `declared` and `oauth` that is the moment it
+   * was established; artifact methods drift out of date and are reconfirmed on a schedule.
+   */
+  confirmedAt: number;
+}
+
+/** Each side of a link is attested separately, by different parties under different methods. */
+export interface Attestations {
+  local: Attestation;
+  external: Attestation;
+}
+
 export interface Connection {
   id: string;
   local: LocalAccount;
@@ -34,6 +73,8 @@ export interface Connection {
   expiresAt: number;
   revokedAt?: number;
   revocationReason?: string;
+  /** Absent on records written before methods were recorded; evidence infers those. */
+  attestations?: Attestations;
 }
 
 export interface Flow {
@@ -91,6 +132,12 @@ export interface Storage {
 export interface Provider {
   id: string;
   name: string;
+  /**
+   * How this implementation demonstrates control. Absent means `oauth`, the redirect and
+   * code exchange the interface below describes. A second implementation may carry the
+   * same id with a different method: one provider, more than one way to prove it.
+   */
+  method?: Method;
   authorizationUrl(input: { state: string; challenge: string; redirectUri: string }): string;
   authenticate(input: {
     code: string;
@@ -106,6 +153,11 @@ export interface Evidence {
   provider: string;
   /** Display name from the provider implementation; absent from older backends. */
   providerName?: string;
+  /**
+   * How each side was established, so a reader can weigh them separately instead of
+   * reading one undifferentiated "verified". Absent from older backends.
+   */
+  attestations?: Attestations;
   siteName: string;
   verifierName: string;
   visibility: Visibility;
@@ -122,4 +174,26 @@ export function status(connection: Connection, now: number): Status {
   if (connection.revokedAt !== undefined) return 'revoked';
 
   return now >= connection.expiresAt ? 'expired' : 'verified';
+}
+
+/**
+ * How to describe one side's proof in plain words. It names the attester and the method
+ * together and does not rank them: whether a given proof is convincing is the reader's
+ * judgement, which is the reason for publishing it rather than a verdict about it.
+ *
+ * An unrecognised method returns nothing, so a renderer omits the line instead of
+ * describing a proof it does not understand.
+ */
+export function attestationLabel(
+  method: string,
+  names: { site: string; provider: string },
+): string | undefined {
+  return {
+    declared: `Stated by ${names.site}`,
+    oauth: `Signed in with ${names.provider}`,
+    attestation: `Published a proof on ${names.provider}`,
+    dns: 'Proved with a DNS record',
+    wellknown: 'Proved with a file on the domain',
+    signature: 'Proved with a signature',
+  }[method];
 }

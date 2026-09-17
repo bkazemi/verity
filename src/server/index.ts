@@ -1,5 +1,11 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import type { Evidence, Flow, LocalAccount } from '../core/index.js';
+import {
+  attestationLabel,
+  type Attestation,
+  type Evidence,
+  type Flow,
+  type LocalAccount,
+} from '../core/index.js';
 import { VerityService, Unavailable, type ServiceOptions } from './service.js';
 
 export { VerityService, Unavailable } from './service.js';
@@ -54,6 +60,40 @@ function account(label: string, reference: string, url?: string) {
 }
 
 /**
+ * Names how one side was established, next to that side. Where the method published a
+ * proof the reader can open it, which is what lets them check the claim without taking
+ * this backend's word for it. Methods are named, never ranked.
+ */
+function attestationNote(
+  attestation: Attestation | undefined,
+  names: { site: string; provider: string },
+) {
+  const label = attestation && attestationLabel(attestation.method, names);
+
+  if (!attestation || !label) return '';
+
+  // Set by a provider implementation from holder-supplied input, so it reaches an href
+  // only after being confirmed http(s).
+  const artifact = attestation.artifactUrl && safeUrl(attestation.artifactUrl);
+
+  return `<br>${escape(label)}.${
+    artifact
+      ? ` <a href="${escape(artifact)}" rel="noreferrer">View the proof</a>. Last checked: ${escape(new Date(attestation.confirmedAt).toISOString())}.`
+      : ''
+  }`;
+}
+
+function safeUrl(value: string) {
+  try {
+    const url = new URL(value);
+
+    return ['https:', 'http:'].includes(url.protocol) ? url.href : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * A link's local side is one of the site's accounts, a page, or the site itself.
  * An absent kind means the site did not say, so nothing is asserted about it.
  */
@@ -62,13 +102,13 @@ function subjectNoun(kind: string | undefined): string | undefined {
 }
 
 function evidencePage(e: Evidence & { linkExpiresAt?: number }, base: string, report: string) {
+  const names = { site: e.siteName, provider: e.providerName ?? e.provider };
+
   return page(
     `${e.status === 'verified' ? 'Verified' : e.status} connection`,
     `
-    <p>${escape(e.siteName)}: ${account(e.local.label, e.local.reference, e.local.profileUrl)}</p>
-    <p>${escape(e.providerName ?? e.provider)}: ${account(e.external.handle, e.external.id, e.external.profileUrl)}</p>
-    <p>The external account holder proved control of it with ${escape(e.providerName ?? e.provider)} and authorized this exact link.
-    What it links to is ${escape(e.siteName)}'s own claim, which ${escape(e.verifierName)} does not check.</p>
+    <p>${escape(e.siteName)}: ${account(e.local.label, e.local.reference, e.local.profileUrl)}${attestationNote(e.attestations?.local, names)}</p>
+    <p>${escape(names.provider)}: ${account(e.external.handle, e.external.id, e.external.profileUrl)}${attestationNote(e.attestations?.external, names)}</p>
     <p>Provider authentication: ${escape(new Date(e.authenticatedAt).toISOString())}. Approval: ${escape(new Date(e.approvedAt).toISOString())}.</p>
     <p>Status: ${escape(e.status)}. Verification expiry: ${escape(new Date(e.expiresAt).toISOString())}.</p>
     ${e.linkExpiresAt ? `<p>Anyone with this link can view and forward it. Link expiry: ${escape(new Date(e.linkExpiresAt).toISOString())}.</p>` : ''}

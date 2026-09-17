@@ -204,10 +204,41 @@ test('distributed badge renders current/expired/revoked evidence and fails close
   assert.equal(element.find('svg')[0]!.find('path')[1]!.attributes['stroke-dasharray'], '108 176');
   assert.equal(element.links()[0]!.children.at(-1)!.className, 'icon');
 
+  const declared = { by: 'backend', method: 'declared', confirmedAt: 1 };
+
+  // A well-formed pair of attestations changes nothing about how the badge renders.
+  evidence = {
+    ...evidence,
+    attestations: {
+      local: declared,
+      external: {
+        by: 'provider',
+        method: 'attestation',
+        artifactUrl: 'https://gist.github.com/alice/abc',
+        expect: 'verity-token',
+        confirmedAt: 2,
+      },
+    },
+  };
+
+  await client.mountBadge(element, { connectionId: 'original' });
+  assert.equal(element.links().length, 1);
+
   for (const changes of [
     { visibility: 'unlisted' },
     { external: { id: '42', handle: 'alice', profileUrl: 'javascript:alert(1)' } },
     { expiresAt: 'tomorrow' },
+    // One side described and the other missing would let a renderer imply a method
+    // for a side that never reported one.
+    { attestations: { local: declared } },
+    { attestations: { local: declared, external: { ...declared, by: 'nobody' } } },
+    // An artifact url is rendered as a link, so only http(s) may ever reach an href.
+    {
+      attestations: {
+        local: declared,
+        external: { ...declared, by: 'provider', artifactUrl: 'javascript:alert(1)' },
+      },
+    },
   ]) {
     const previous = evidence;
 
@@ -229,7 +260,11 @@ test('distributed badge renders current/expired/revoked evidence and fails close
   }
 });
 
-test('the evidence dialog presents both sides of a link as parallel cards', async () => {
+/**
+ * Mounts a badge, clicks it, and returns the dialog it opened. Attestations vary per case
+ * because how each side was established is the thing under test; everything else is fixed.
+ */
+async function renderDialog(attestations?: Record<string, unknown>) {
   const asset = await readFile(new URL('../dist/verity.js', import.meta.url), 'utf8');
 
   const evidence = {
@@ -237,7 +272,7 @@ test('the evidence dialog presents both sides of a link as parallel cards', asyn
     provider: 'github',
     providerName: 'GitHub',
     siteName: 'site.test',
-    verifierName: 'verifier.test (self-hosted Verity)',
+    verifierName: 'verifier.test',
     local: {
       label: 'Alice',
       reference: 'site.test author',
@@ -250,9 +285,18 @@ test('the evidence dialog presents both sides of a link as parallel cards', asyn
     authenticatedAt: 1,
     approvedAt: 1,
     expiresAt: Date.now() + 60000,
+    attestations,
   };
 
   const body = new Element();
+
+  const element = (tag: string) => {
+    const created = new Element();
+
+    created.tagName = tag;
+
+    return created;
+  };
 
   const context = vm.createContext({
     URL,
@@ -275,26 +319,14 @@ test('the evidence dialog presents both sides of a link as parallel cards', asyn
     location: { href: 'https://site.test/profile', origin: 'https://site.test' },
     document: {
       body,
-      createElementNS: (_namespace: string, tag: string) => {
-        const element = new Element();
-
-        element.tagName = tag;
-
-        return element;
-      },
-      createElement: (tag: string) => {
-        const element = new Element();
-
-        element.tagName = tag;
-
-        return element;
-      },
+      createElementNS: (_namespace: string, tag: string) => element(tag),
+      createElement: element,
       createTextNode: (text: string) => {
-        const element = new Element();
+        const created = new Element();
 
-        element.textContent = text;
+        created.textContent = text;
 
-        return element;
+        return created;
       },
     },
     fetch: async () => ({ ok: true, json: async () => evidence }),
@@ -303,7 +335,7 @@ test('the evidence dialog presents both sides of a link as parallel cards', asyn
   vm.runInContext(asset, context);
 
   const client = context.Verity.init({ backendUrl: 'https://verifier.test/api/verity' }) as {
-    mountBadge(element: Element, options: { connectionId: string }): Promise<void>;
+    mountBadge(host: Element, options: { connectionId: string }): Promise<void>;
   };
 
   const host = new Element();
@@ -317,11 +349,27 @@ test('the evidence dialog presents both sides of a link as parallel cards', asyn
   await open({ button: 0, preventDefault() {} });
   await new Promise((resolve) => setTimeout(resolve, 0));
 
-  const dialog = body.all().find((element) => element.tagName === 'dialog')!;
+  const dialog = body.all().find((found) => found.tagName === 'dialog')!;
 
   assert.ok(dialog, 'a dialog is attached to the document');
 
-  const cards = dialog.all().filter((element) => element.className.includes('account'));
+  return {
+    dialog,
+    cards: dialog.all().filter((found) => found.className.includes('account')),
+  };
+}
+
+test('the evidence dialog presents both sides of a link as parallel cards', async () => {
+  const { dialog, cards } = await renderDialog({
+    local: { by: 'backend', method: 'declared', confirmedAt: 1 },
+    external: {
+      by: 'provider',
+      method: 'attestation',
+      artifactUrl: 'https://gist.github.com/alice/abc',
+      expect: 'verity-c1',
+      confirmedAt: 2,
+    },
+  });
 
   // Both sides render as cards, so neither reads as a caption on the other.
   assert.equal(cards.length, 2);
@@ -344,4 +392,73 @@ test('the evidence dialog presents both sides of a link as parallel cards', asyn
   // The two cards are joined by a link mark, not by words.
   assert.ok(!dialog.textContent.includes('This verification links'));
   assert.equal(dialog.all().filter((e) => e.attributes['class'] === 'joiner').length, 1);
+
+  // Each side says how it was established, on that side, with neither ranked.
+  assert.match(local.textContent, /Stated by site\.test/);
+  assert.match(external.textContent, /Published a proof on GitHub/);
+  assert.ok(!local.textContent.includes('Published a proof'));
+  assert.ok(!external.textContent.includes('Stated by'));
+
+  // The proof explains the verified state, so it is read after that state, not before it.
+  assert.deepEqual(
+    external.children.map((child) => child.className || child.tagName),
+    ['h3', 'a', 'muted reference', 'summary', 'muted method', 'muted proof', 'dl'],
+  );
+
+  // A published proof is reachable, so a reader can check it without trusting this backend.
+  const proof = external.links().find((link) => link.textContent.includes('View the proof'))!;
+
+  assert.equal(proof.href, 'https://gist.github.com/alice/abc');
+
+  // Every time on the card sits in one table, so none of them read as prose.
+  assert.deepEqual(
+    external
+      .find('dl')[0]!
+      .children.filter((child) => child.tagName === 'dt')
+      .map((child) => child.textContent),
+    ['Approved', 'Valid until', 'Last checked'],
+  );
+
+  // The flattened sentence described one method for both sides and named neither.
+  assert.ok(!dialog.textContent.includes('proved control of it with their provider'));
+  assert.ok(!dialog.textContent.includes('does not check'));
+
+  // Nothing below the cards may name a provider: a subject proved a second way gets a
+  // second card, and everything under them has to still read correctly when it does.
+  const footer = dialog.all().find((found) => found.className === 'muted explanation')!;
+
+  assert.ok(footer, 'the cards are followed by a footer');
+  assert.ok(!footer.textContent.includes('GitHub'));
+  assert.ok(!footer.textContent.includes('alice'));
+  assert.ok(!footer.textContent.includes('site.test'));
+});
+
+test('an unrecognised method is omitted rather than described, and oauth offers no proof link', async () => {
+  const unknown = await renderDialog({
+    local: { by: 'backend', method: 'declared', confirmedAt: 1 },
+    external: { by: 'provider', method: 'telepathy', confirmedAt: 2 },
+  });
+
+  assert.match(unknown.dialog.textContent, /Stated by site\.test/);
+
+  // Nothing is claimed about a method this renderer does not understand.
+  assert.ok(!unknown.dialog.textContent.includes('telepathy'));
+  assert.ok(!unknown.dialog.textContent.includes('View the proof'));
+
+  // oauth leaves no public artifact, so it is named without offering a link to open.
+  const signedIn = await renderDialog({
+    local: { by: 'backend', method: 'declared', confirmedAt: 1 },
+    external: { by: 'provider', method: 'oauth', confirmedAt: 2 },
+  });
+
+  assert.match(signedIn.dialog.textContent, /Signed in with GitHub/);
+  assert.ok(!signedIn.dialog.textContent.includes('View the proof'));
+  assert.ok(!signedIn.dialog.textContent.includes('last checked'));
+
+  // An older backend sends no attestations at all, and the cards simply omit the line.
+  const older = await renderDialog();
+
+  assert.equal(older.cards.length, 2);
+  assert.ok(!older.dialog.textContent.includes('Stated by'));
+  assert.ok(!older.dialog.textContent.includes('Signed in with'));
 });

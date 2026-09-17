@@ -1,4 +1,4 @@
-import type { Evidence } from '../core/index.js';
+import { attestationLabel, type Attestation, type Evidence } from '../core/index.js';
 import { verificationMark } from './mark.js';
 import { providerMark } from './provider-mark.js';
 
@@ -15,7 +15,7 @@ const styles = `
   a { color: #245f43; text-underline-offset: 3px; overflow-wrap: anywhere; }
   a:focus-visible, button:focus-visible { outline: 2px solid #357ce5; outline-offset: 3px; }
   .summary { display: flex; align-items: center; gap: 8px; margin-top: 16px; }
-  .mark { width: 24px; height: 24px; flex-shrink: 0; }
+  .mark { width: 36px; height: 36px; flex-shrink: 0; }
   .provider { width: 14px; height: 14px; }
   .state { font-size: 14px; font-weight: 650; line-height: 1.4; }
   .muted { color: #6b786f; font-size: 12px; }
@@ -23,11 +23,13 @@ const styles = `
   .account h3 { display: flex; align-items: center; gap: 6px; margin: 0 0 3px; color: #6b786f; font-size: 11px; font-weight: 550; }
   .account a, .account strong { font-weight: 650; font-size: 14px; }
   .reference { margin-top: 2px; }
+  .method { margin-top: 8px; }
+  .proof { margin-top: 2px; }
   .joiner { display: block; width: 20px; height: 20px; margin: 8px auto -4px; color: #90a096; }
   dl { margin: 16px 0 0; padding-top: 12px; border-top: 1px solid #e5e9e3; display: grid; grid-template-columns: auto 1fr; gap: 5px 16px; font-size: 11px; }
   dt { color: #6b786f; }
   dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
-  .explanation { padding-top: 16px; border-top: 1px solid #e5e9e3; }
+  .explanation { margin-top: 16px; }
 `;
 
 function node<K extends keyof HTMLElementTagNameMap>(tag: K, text = '', className = '') {
@@ -86,6 +88,40 @@ function localSide(evidence: Evidence): { heading: string; value: string } {
 }
 
 /**
+ * Names how one side was established, inside that side's card. A method that published a
+ * proof links it, so a reader can check the claim without taking this backend's word for
+ * it. The methods are named, never ranked: which ones convince is the reader's call.
+ */
+function attestationNote(
+  attestation: Attestation | undefined,
+  names: { site: string; provider: string },
+): HTMLElement[] {
+  const label = attestation && attestationLabel(attestation.method, names);
+
+  if (!attestation || !label) return [];
+
+  const note = node('div', label, 'muted method');
+
+  // Evidence is rejected before it reaches here unless every artifact url is http(s).
+  if (!attestation.artifactUrl) return [note];
+
+  const proof = node('div', '', 'muted proof');
+  const link = node('a', 'View the proof');
+
+  link.href = attestation.artifactUrl;
+  link.rel = 'noreferrer';
+
+  proof.append(link);
+
+  return [note, proof];
+}
+
+/** Seconds are noise on a record measured in days, and every time here reads the same way. */
+function moment(time: number) {
+  return new Date(time).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+}
+
+/**
  * Both sides of a link render as the same card, so a reader can see it is a pair.
  * `extra` carries evidence belonging to that side alone: a provider authenticates and
  * expires on its own terms, and a second provider on the same subject would differ.
@@ -136,17 +172,16 @@ function render(content: HTMLElement, evidence: Evidence) {
     dateRows.push([current ? 'Valid until' : 'Expired on', evidence.expiresAt]);
   }
 
+  // When an artifact was last read belongs with the other times, not inside a sentence.
+  // Only artifact methods drift: a sign-in is established once and does not go stale.
+  if (evidence.attestations?.external.artifactUrl)
+    dateRows.push(['Last checked', evidence.attestations.external.confirmedAt]);
+
   for (const [label, time] of dateRows) {
-    dates.append(node('dt', label), node('dd', new Date(time).toLocaleString()));
+    dates.append(node('dt', label), node('dd', moment(time)));
   }
 
-  // Names neither the provider nor a kind of local subject: both vary, and a link
-  // whose site never declared what it linked must not be described as an account.
-  const explanation = node(
-    'p',
-    `The external account holder proved control of it with their provider and approved this exact link. What it links to is ${evidence.siteName}'s own claim, which this verifier does not check.`,
-    'muted explanation',
-  );
+  const names = { site: evidence.siteName, provider };
 
   // Each card says what it is. Without that the pair is two unlabelled boxes.
   const local = localSide(evidence);
@@ -159,6 +194,7 @@ function render(content: HTMLElement, evidence: Evidence) {
     // card stays: that one is the provider's identifier, not the site's own wording.
     undefined,
     evidence.local.profileUrl,
+    ...attestationNote(evidence.attestations?.local, names),
   );
 
   const externalCard = accountCard(
@@ -166,7 +202,10 @@ function render(content: HTMLElement, evidence: Evidence) {
     `@${evidence.external.handle.replace(/^@/, '')}`,
     evidence.external.id,
     evidence.external.profileUrl,
+    // Status first, then how it was shown, then when. The proof explains the state
+    // above it, so it cannot sit before that state has been given.
     summary,
+    ...attestationNote(evidence.attestations?.external, names),
     dates,
   );
 
@@ -174,11 +213,12 @@ function render(content: HTMLElement, evidence: Evidence) {
     localCard,
     linkMark(),
     externalCard,
-    explanation,
+    // Nothing below the cards may name a provider. Approval, method and dates belong to
+    // the card they came from, and a second provider on this subject gets its own card.
     node(
       'p',
       'Verification does not guarantee legal identity, trustworthiness, or permanent ownership.',
-      'muted',
+      'muted explanation',
     ),
   );
 }
