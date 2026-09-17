@@ -4,6 +4,13 @@
 //
 // Secrets are never set here. Use `wrangler secret put NAME` for:
 //   GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, OWNER_KEY
+//
+// Those two GitHub secrets are only needed by githubProvider(), the sign-in
+// method, which is what cloudflare/worker.ts is wired to. The holder-paced
+// methods need no registration and no secret at all: githubGistProvider()
+// reads a public gist, and pgpProvider() checks a signature from an OpenPGP
+// key. Swapping the provider in worker.ts is the whole change; a connection
+// already established under one method keeps whichever method proved it.
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "verity",
