@@ -68,6 +68,12 @@ h1 {
   line-height: 1.25;
 }
 
+/*
+ * A page holding one thing needs no rule under its heading. The rule divides a heading
+ * from the record beneath it, and a page that only asks for a key has no record to divide.
+ */
+main.single h1 { margin-bottom: 1.25rem; padding-bottom: 0; border-bottom: none; }
+
 h2 { margin: 2rem 0 .75rem; font-size: 1.125rem; font-weight: 620; letter-spacing: -.01em; }
 
 h3 { margin: 0 0 .5rem; font-size: 1rem; font-weight: 620; }

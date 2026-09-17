@@ -98,7 +98,7 @@ test('Cloudflare SQLite transactions, persistent owner sessions, OAuth, public e
     );
 
     assert.equal((await request('/api/verity/mine')).status, 404);
-    assert.match(await (await request('/')).text(), /Owner sign in/);
+    assert.match(await (await request('/')).text(), /<h1>Sign in<\/h1>/);
     assert.equal((await post('/login', 'key=wrong')).status, 403);
     // Bounded before anything reads it. The bound is large enough for a pasted key.
     assert.equal((await post('/login', 'x'.repeat(65537))).status, 413);

@@ -37,10 +37,27 @@ const escape = (value: string) =>
     (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!,
   );
 
-const html = (body: string, status = 200) =>
+/**
+ * Every page here says in its heading what it is, the way the library's pages do. The
+ * logotype above already says whose it is, so the heading never has to repeat that.
+ */
+const html = (heading: string, body: string, status = 200, variant = '') =>
   new Response(
-    `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Verity owner settings</title><link rel="stylesheet" href="/api/verity/style.css?v=${styleVersion}"><body><main>${logo}<h1>Owner settings</h1>${body}</main></body></html>`,
+    `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(heading)} · Verity</title><link rel="stylesheet" href="/api/verity/style.css?v=${styleVersion}"><body><main${variant && ` class="${variant}"`}>${logo}<h1>${escape(heading)}</h1>${body}</main></body></html>`,
     { status, headers: { ...safeHeaders, 'Content-Type': 'text/html; charset=utf-8' } },
+  );
+
+/**
+ * The page at the root for anybody not signed in, and the only thing it does. Whoever
+ * reaches it either holds the owner key or has no business past it, so it carries one
+ * field and no account of what lies behind.
+ */
+const signIn = (message = '', status = 200) =>
+  html(
+    'Sign in',
+    `${message}<form action="/login" method="post"><label>Owner key <input name="key" type="password" autocomplete="current-password" required></label><button>Sign in</button></form>`,
+    status,
+    'single',
   );
 
 const redirect = (cookie: string) =>
@@ -91,16 +108,16 @@ export default {
   async fetch(request: Request, env: Env) {
     const url = new URL(request.url);
 
-    if (url.origin !== env.PUBLIC_ORIGIN) return html('Unavailable', 404);
+    if (url.origin !== env.PUBLIC_ORIGIN) return html('Unavailable', '', 404);
 
-    if (!['GET', 'POST'].includes(request.method)) return html('Unavailable', 405);
+    if (!['GET', 'POST'].includes(request.method)) return html('Unavailable', '', 405);
 
     let body: ArrayBuffer | undefined;
 
     try {
       body = await boundedBody(request);
     } catch {
-      return html('Request too large', 413);
+      return html('Request too large', '', 413);
     }
 
     try {
@@ -112,7 +129,7 @@ export default {
         redirect: 'manual',
       });
     } catch {
-      return html('Temporarily unavailable', 503);
+      return html('Temporarily unavailable', '', 503);
     }
   },
 };
@@ -181,14 +198,14 @@ export class VerityStore {
     try {
       return await this.handle(request);
     } catch {
-      return html('Temporarily unavailable', 503);
+      return html('Temporarily unavailable', '', 503);
     }
   }
 
   private async handle(request: Request): Promise<Response> {
     const url = new URL(request.url);
 
-    if (url.origin !== this.env.PUBLIC_ORIGIN) return html('Unavailable', 404);
+    if (url.origin !== this.env.PUBLIC_ORIGIN) return html('Unavailable', '', 404);
 
     if (
       request.method === 'POST' &&
@@ -202,23 +219,23 @@ export class VerityStore {
     }
 
     if (request.method === 'POST') {
-      if (!(await this.auth.allow('mutation', 60, 60000))) return html('Try again later.', 429);
+      if (!(await this.auth.allow('mutation', 60, 60000)))
+        return html('Too many requests', '<p>Try again later.</p>', 429);
 
       if (url.pathname === '/login') {
         if (!(await this.auth.allow('login', 10, 15 * 60000)))
-          return html('Try again in fifteen minutes.', 429);
+          return html('Too many requests', '<p>Try again in fifteen minutes.</p>', 429);
 
         const key = new URLSearchParams(await request.text()).get('key') ?? '';
         const cookie = await this.auth.login(key);
 
-        return cookie
-          ? redirect(cookie)
-          : html('Incorrect owner key. <a href="/">Try again</a>', 403);
+        return cookie ? redirect(cookie) : signIn('<p>Incorrect owner key.</p>', 403);
       }
 
       if (url.pathname === '/logout') return redirect(await this.auth.logout(request));
 
-      if (request.headers.get('origin') !== this.env.PUBLIC_ORIGIN) return html('Unavailable', 403);
+      if (request.headers.get('origin') !== this.env.PUBLIC_ORIGIN)
+        return html('Unavailable', '', 403);
     }
 
     if (url.pathname.startsWith('/api/verity/')) {
@@ -235,23 +252,24 @@ export class VerityStore {
       return this.app.handle(request);
     }
 
-    if (request.method !== 'GET' || url.pathname !== '/') return html('Unavailable', 404);
+    if (request.method !== 'GET' || url.pathname !== '/') return html('Unavailable', '', 404);
 
-    if (!(await this.auth.authenticated(request)))
-      return html(`<h2>Owner sign in</h2><p>Manage the account connection for ${escape(this.env.SITE_NAME)}.</p>
-        <form action="/login" method="post"><label>Owner key <input name="key" type="password" autocomplete="current-password" required></label><button>Sign in</button></form>`);
+    if (!(await this.auth.authenticated(request))) return signIn();
 
     const connections = await this.app.service.mine(this.local);
 
     const local = localSide(this.local, this.env.SITE_NAME);
 
-    return html(`<div class="side"><p class="who">${escape(local.heading)}</p>
+    return html(
+      'Owner settings',
+      `<div class="side"><p class="who">${escape(local.heading)}</p>
       <p class="name">${escape(local.value)}</p>
       <p class="reference">${escape(this.local.reference)}</p></div>
       <p><a href="/api/verity/verify">Verify with GitHub or renew a connection</a></p>
       <p class="fine">Approve a public connection to display it on your site. Renew an existing one to extend it in place; only a new pair needs a new connection.</p>
       ${connections.map((e) => this.connection(e)).join('')}
-      <form action="/logout" method="post"><button>Sign out</button></form>`);
+      <form action="/logout" method="post"><button>Sign out</button></form>`,
+    );
   }
 
   /** One connection, with the state, the visibility and the expiry each said once. */
