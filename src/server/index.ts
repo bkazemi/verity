@@ -13,6 +13,7 @@ import {
 } from '../core/index.js';
 import { VerityService, Unavailable, type ServiceOptions } from './service.js';
 import { copyScript } from './copy.js';
+import { logo } from './logo.js';
 import { stylesheet, styleVersion } from './style.js';
 
 export { VerityService, Unavailable } from './service.js';
@@ -45,7 +46,7 @@ const escape = (value: unknown) =>
   );
 
 const page = (prefix: string, title: string, body: string) =>
-  `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(title)} · Verity</title><link rel="stylesheet" href="${escape(prefix)}/style.css?v=${styleVersion}"><body><main><h1>${escape(title)}</h1>${body}</main></body></html>`;
+  `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(title)} · Verity</title><link rel="stylesheet" href="${escape(prefix)}/style.css?v=${styleVersion}"><body><main>${logo}<h1>${escape(title)}</h1>${body}</main></body></html>`;
 
 const headers = {
   'Cache-Control': 'no-store',

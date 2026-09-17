@@ -47,6 +47,17 @@ main {
   padding-top: 3rem;
 }
 
+/*
+ * The logotype, above the page's own heading. Sized by cap height rather than by the box
+ * around it, which the descender of the y makes taller than the word looks. The word is
+ * drawn in currentColor, so it takes the ink colour of whichever scheme is in use.
+ */
+.logo {
+  display: block;
+  height: 1.75rem;
+  margin-bottom: 1.5rem;
+}
+
 h1 {
   margin: 0 0 1.75rem;
   padding-bottom: 1rem;

@@ -1,5 +1,6 @@
 import type { DurableObjectNamespace, DurableObjectState } from '@cloudflare/workers-types';
 import { externalName, localSide, statusLabel, type Evidence } from '../src/core/index.js';
+import { logo } from '../src/server/logo.js';
 import { styleVersion } from '../src/server/style.js';
 import { createVerity, githubProvider } from '../src/server/index.js';
 import { CloudflareStorage } from './storage.js';
@@ -38,7 +39,7 @@ const escape = (value: string) =>
 
 const html = (body: string, status = 200) =>
   new Response(
-    `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Verity owner settings</title><link rel="stylesheet" href="/api/verity/style.css?v=${styleVersion}"><body><main><h1>Verity</h1>${body}</main></body></html>`,
+    `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Verity owner settings</title><link rel="stylesheet" href="/api/verity/style.css?v=${styleVersion}"><body><main>${logo}<h1>Owner settings</h1>${body}</main></body></html>`,
     { status, headers: { ...safeHeaders, 'Content-Type': 'text/html; charset=utf-8' } },
   );
 
