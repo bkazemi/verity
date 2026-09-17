@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { VerityService } from '../src/server/service.js';
+import { VerityService, type ServiceOptions } from '../src/server/service.js';
 
 /** Either shape of provider drives the same service, so the fixture takes both. */
 type FakeProvider = ReturnType<typeof fakeProvider> | ReturnType<typeof fakeArtifactProvider>;
@@ -14,7 +14,7 @@ import {
   projectPage,
 } from './helpers.js';
 
-function fixture(provider: FakeProvider = fakeProvider()) {
+function fixture(provider: FakeProvider = fakeProvider(), extra: Partial<ServiceOptions> = {}) {
   let now = 1000000;
 
   const storage = new MemoryStorage();
@@ -29,6 +29,7 @@ function fixture(provider: FakeProvider = fakeProvider()) {
     now: () => now,
     validityMs: 1000,
     shareTtlMs: 2000,
+    ...extra,
   });
 
   async function pending(local = alice) {
@@ -500,4 +501,155 @@ test('a redirect provider has no submit path and an artifact provider no callbac
   const started = await artifact.service.start(alice);
 
   assert.equal(started.authorizationUrl, undefined);
+});
+
+/** A connection whose external side is a published proof, ready to be read again. */
+async function proved(extra: Partial<ServiceOptions> = {}) {
+  const provider = fakeArtifactProvider();
+
+  const f = fixture(provider, {
+    validityMs: 1000000,
+    recheckMs: 1000,
+    freshnessMs: 5000,
+    recheckTimeoutMs: 50,
+    ...extra,
+  });
+
+  const url = 'https://notes.test/alice/1';
+  const flow = await f.service.start(alice);
+
+  provider.artifacts.set(url, flow.expect!);
+  await f.service.submit(flow.flowId, flow.binding, url);
+
+  const id = (await f.service.approve(flow.flowId, flow.binding, alice, 'public'))!;
+
+  return { ...f, provider, url, id };
+}
+
+test('a published proof is read again on a schedule and carries the time forward', async () => {
+  const f = await proved();
+
+  // Just confirmed, so there is nothing to do yet and no request is spent.
+  assert.equal(await f.service.recheck(), 0);
+  assert.equal(f.provider.calls, 1);
+
+  f.advance(1000);
+  assert.equal(await f.service.recheck(), 1);
+
+  const evidence = await f.service.read(f.id);
+
+  assert.equal(evidence.status, 'verified');
+  assert.equal(evidence.attestations!.external.confirmedAt, 1001000);
+
+  // For an artifact method this is when it was last confirmed, not first seen.
+  assert.equal(evidence.authenticatedAt, 1001000);
+});
+
+test('a proof that stops resolving ages out of verified and returns when it does', async () => {
+  const f = await proved();
+
+  f.provider.artifacts.delete(f.url);
+  f.advance(1000);
+
+  // One failed read is not evidence the proof is gone, so nothing is written.
+  assert.equal(await f.service.recheck(), 0);
+  assert.equal((await f.service.read(f.id)).status, 'verified');
+
+  f.advance(4000);
+  assert.equal((await f.service.read(f.id)).status, 'expired');
+  assert.deepEqual(await f.service.published(), []);
+
+  // Nothing was revoked, so republishing the proof restores the connection.
+  f.provider.artifacts.set(f.url, (await f.service.read(f.id)).attestations!.external.expect!);
+  assert.equal(await f.service.recheck(), 1);
+  assert.equal((await f.service.read(f.id)).status, 'verified');
+  assert.equal((await f.service.published()).length, 1);
+});
+
+test('a sign-in never goes stale, and a revoked or expired proof is not read again', async () => {
+  const signedIn = fixture(fakeProvider(), {
+    validityMs: 1000000,
+    recheckMs: 1000,
+    freshnessMs: 5000,
+  });
+
+  const flow = await signedIn.connect('public');
+
+  signedIn.advance(500000);
+  assert.equal((await signedIn.service.read(flow.id)).status, 'verified');
+
+  // A redirect provider has no artifact to read, so the pass is a no-op for it.
+  assert.equal(await signedIn.service.recheck(), 0);
+
+  const revoked = await proved();
+
+  await revoked.service.revoke(revoked.id, alice);
+  revoked.advance(1000);
+  assert.equal(await revoked.service.recheck(), 0);
+  assert.equal(revoked.provider.calls, 1);
+
+  const lapsed = await proved({ validityMs: 2000 });
+
+  lapsed.advance(3000);
+  assert.equal(await lapsed.service.recheck(), 0);
+  assert.equal(lapsed.provider.calls, 1);
+});
+
+test('a reread that names a different account confirms nothing', async () => {
+  const f = await proved();
+
+  f.provider.externalId = 'someone-else';
+  f.advance(1000);
+
+  assert.equal(await f.service.recheck(), 0);
+  assert.equal((await f.service.read(f.id)).attestations!.external.confirmedAt, 1000000);
+
+  f.advance(4000);
+  assert.equal((await f.service.read(f.id)).status, 'expired');
+});
+
+test('a provider that never answers does not hold up the run', async () => {
+  const f = await proved();
+
+  f.provider.verify = () => new Promise(() => {});
+  f.advance(1000);
+
+  assert.equal(await f.service.recheck(), 0);
+  assert.equal((await f.service.read(f.id)).attestations!.external.confirmedAt, 1000000);
+});
+
+test('each run spends a bounded number of requests, oldest proof first', async () => {
+  const f = await proved();
+  const ids = [f.id];
+
+  // Three more proofs, each confirmed a second after the one before it.
+  for (const n of [2, 3, 4]) {
+    const url = `https://notes.test/alice/${n}`;
+
+    f.advance(1000);
+
+    const flow = await f.service.start(alice);
+
+    f.provider.artifacts.set(url, flow.expect!);
+    await f.service.submit(flow.flowId, flow.binding, url);
+    ids.push((await f.service.approve(flow.flowId, flow.binding, alice, 'public'))!);
+  }
+
+  const before = f.provider.calls;
+
+  f.advance(1000);
+  assert.equal(await f.service.recheck(2), 2);
+  assert.equal(f.provider.calls - before, 2);
+
+  const confirmed = await Promise.all(
+    ids.map(async (id) => (await f.service.read(id)).attestations!.external.confirmedAt),
+  );
+
+  // The two longest unread went first; the others keep the times they already had.
+  assert.deepEqual(confirmed, [1004000, 1004000, 1002000, 1003000]);
+});
+
+test('freshness must outlast the schedule meant to keep it', () => {
+  assert.throws(() => fixture(fakeArtifactProvider(), { recheckMs: 5000, freshnessMs: 5000 }));
+  assert.doesNotThrow(() => fixture(fakeArtifactProvider(), { freshnessMs: Infinity }));
 });

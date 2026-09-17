@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import {
   attestationLabel,
   isArtifactProvider,
+  statusLabel,
   type Attestation,
   type Evidence,
   type Flow,
@@ -108,12 +109,12 @@ function evidencePage(e: Evidence & { linkExpiresAt?: number }, base: string, re
   const names = { site: e.siteName, provider: e.providerName ?? e.provider };
 
   return page(
-    `${e.status === 'verified' ? 'Verified' : e.status} connection`,
+    `${statusLabel(e, Date.now())} connection`,
     `
     <p>${escape(e.siteName)}: ${account(e.local.label, e.local.reference, e.local.profileUrl)}${attestationNote(e.attestations?.local, names)}</p>
     <p>${escape(names.provider)}: ${account(e.external.handle, e.external.id, e.external.profileUrl)}${attestationNote(e.attestations?.external, names)}</p>
     <p>Provider authentication: ${escape(new Date(e.authenticatedAt).toISOString())}. Approval: ${escape(new Date(e.approvedAt).toISOString())}.</p>
-    <p>Status: ${escape(e.status)}. Verification expiry: ${escape(new Date(e.expiresAt).toISOString())}.</p>
+    <p>Status: ${escape(statusLabel(e, Date.now()))}. Verification expiry: ${escape(new Date(e.expiresAt).toISOString())}.</p>
     ${e.linkExpiresAt ? `<p>Anyone with this link can view and forward it. Link expiry: ${escape(new Date(e.linkExpiresAt).toISOString())}.</p>` : ''}
     <p>This connection does not establish legal identity, trustworthiness, content authorship, or permanent ownership.</p>
     <p><a href="${escape(base)}/external-revoke/${escape(e.id)}">Remove this connection using your external account</a></p>

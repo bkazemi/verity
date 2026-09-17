@@ -1,4 +1,4 @@
-import { attestationLabel, type Attestation, type Evidence } from '../core/index.js';
+import { attestationLabel, statusLabel, type Attestation, type Evidence } from '../core/index.js';
 import { verificationMark } from './mark.js';
 import { providerMark } from './provider-mark.js';
 
@@ -155,7 +155,7 @@ function accountCard(
 
 function render(content: HTMLElement, evidence: Evidence) {
   const current = evidence.status === 'verified' && evidence.expiresAt > Date.now();
-  const status = current ? 'Verified' : evidence.status === 'revoked' ? 'Revoked' : 'Expired';
+  const status = statusLabel(evidence, Date.now());
   const provider = evidence.providerName ?? evidence.provider;
   const summary = node('div', '', 'summary');
   const copy = node('div');
@@ -169,7 +169,11 @@ function render(content: HTMLElement, evidence: Evidence) {
   if (evidence.status === 'revoked') {
     if (evidence.revokedAt !== undefined) dateRows.push(['Revoked on', evidence.revokedAt]);
   } else {
-    dateRows.push([current ? 'Valid until' : 'Expired on', evidence.expiresAt]);
+    // A proof that has gone unread has not reached its expiry, so it still reads forward.
+    dateRows.push([
+      evidence.expiresAt > Date.now() ? 'Valid until' : 'Expired on',
+      evidence.expiresAt,
+    ]);
   }
 
   // When an artifact was last read belongs with the other times, not inside a sentence.

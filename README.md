@@ -53,7 +53,7 @@ One package, one import path:
 import { init } from 'verity';
 
 // Backend
-import { createVerity, githubProvider, PostgresStorage } from 'verity';
+import { createVerity, githubProvider, githubGistProvider, PostgresStorage } from 'verity';
 
 // Shared types
 import type { LocalAccount, Evidence } from 'verity';
@@ -90,6 +90,8 @@ const verity = createVerity({
     };
   },
 });
+// `githubGistProvider()` is the alternative: the holder publishes a public gist containing
+// a per-flow line and pastes its address back, which needs no OAuth app and no secret.
 // Your router calls verity.handle(Request), or mounts this Node callback:
 const handler = nodeHandler(verity.handle, 'https://community.example');
 ```
@@ -141,9 +143,17 @@ Visitors can inspect the evidence in the pill's modal or follow its evidence lin
 
 ## Contract and operations
 
-Defaults: verification lasts **30 days**, flows **10 minutes**, sharing links **7 days**. Configure `validityMs`, `flowTtlMs`, and `shareTtlMs` in milliseconds. All evidence responses use **no-store**; declarative badges refresh every **30 seconds** and remove their active presentation if refresh fails. Manual `mountBadge` calls render once; adopters must call again at least every 30 seconds. The evidence page is authoritative at request time. There is no background provider recheck or claim of continuous ownership.
+Defaults: verification lasts **30 days**, flows **10 minutes**, sharing links **7 days**. Configure `validityMs`, `flowTtlMs`, and `shareTtlMs` in milliseconds. All evidence responses use **no-store**; declarative badges refresh every **30 seconds** and remove their active presentation if refresh fails. Manual `mountBadge` calls render once; adopters must call again at least every 30 seconds. The evidence page is authoritative at request time. Nothing here claims continuous ownership.
 
 Call `verity.service.prune()` periodically; the example runs it hourly. It deletes expired flows and removes expired/revoked evidence after a default 90-day history period. See the retention policy before changing that period.
+
+### Rechecking published proofs
+
+A sign-in happened once and stays happened, so it needs no upkeep. A published proof is different: it is only true while the artifact is still published, and the holder can delete it without telling anyone. Backends using an artifact provider must therefore call `verity.service.recheck()` on the same schedule; the Cloudflare example runs it hourly beside `prune()`.
+
+Each run reads the proofs that are due, oldest first, and takes a `budget` argument bounding how many it reads (default 5) because providers rate-limit unauthenticated callers. A proof is re-read every `recheckMs` (default 24 hours) and counts as current for `freshnessMs` after its last successful read (default 7 days); `freshnessMs` must exceed `recheckMs`, so a few failed reads in a row change nothing. Past that, the connection reports `expired` and drops out of `published()` until a later read succeeds. A failed read writes nothing at all: a provider being down is not a revocation, and nothing here revokes on the holder's behalf.
+
+**A backend that never calls `recheck()` must set `freshnessMs: Infinity`.** Otherwise every artifact-proved connection ages out after a week, correctly: a proof nobody reads is a proof nobody has confirmed. Renderers word that state as _Unconfirmed_ rather than _Expired_, since the approval itself has not run out.
 
 ## Formatting
 

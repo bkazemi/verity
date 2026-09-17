@@ -1,4 +1,4 @@
-import type { Evidence } from '../core/index.js';
+import { statusLabel, type Evidence } from '../core/index.js';
 import { verificationMark } from './mark.js';
 import { providerMark } from './provider-mark.js';
 
@@ -73,11 +73,7 @@ export function renderBadge(element: HTMLElement, evidence: Evidence): HTMLAncho
   const current = evidence.status === 'verified' && evidence.expiresAt > Date.now();
   const state = current ? 'verified' : evidence.status === 'revoked' ? 'revoked' : 'expired';
 
-  const label = {
-    verified: 'Verified',
-    expired: 'Expired',
-    revoked: 'Revoked',
-  }[state];
+  const label = statusLabel(evidence, Date.now());
 
   const handle = `@${evidence.external.handle.replace(/^@/, '')}`;
   const badge = frame(element, state) as HTMLAnchorElement;

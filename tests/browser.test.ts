@@ -188,7 +188,14 @@ test('distributed badge renders current/expired/revoked evidence and fails close
 
   assert.equal(element.find('svg')[0]!.find('path')[1]!.attributes['stroke-dasharray'], '108 176');
   assert.equal(element.links()[0]!.children.at(-1)!.className, 'icon');
-  evidence = { ...evidence, status: 'revoked' };
+
+  // A proof nobody has been able to read lately has not reached its expiry, and saying
+  // "expired" of a record still inside its window would be the wrong thing to have said.
+  evidence = { ...evidence, status: 'expired', expiresAt: Date.now() + 60000 };
+  await client.mountBadge(element, { connectionId: 'original' });
+  assert.match(element.textContent, /Unconfirmed/);
+  assert.ok(!element.textContent.includes('Expired'));
+  evidence = { ...evidence, status: 'revoked', expiresAt: 1 };
   await client.mountBadge(element, { connectionId: 'original' });
   assert.match(element.textContent, /Revoked/);
   assert.equal(element.find('svg').length, 2);
@@ -264,7 +271,10 @@ test('distributed badge renders current/expired/revoked evidence and fails close
  * Mounts a badge, clicks it, and returns the dialog it opened. Attestations vary per case
  * because how each side was established is the thing under test; everything else is fixed.
  */
-async function renderDialog(attestations?: Record<string, unknown>) {
+async function renderDialog(
+  attestations?: Record<string, unknown>,
+  overrides: Record<string, unknown> = {},
+) {
   const asset = await readFile(new URL('../dist/verity.js', import.meta.url), 'utf8');
 
   const evidence = {
@@ -286,6 +296,7 @@ async function renderDialog(attestations?: Record<string, unknown>) {
     approvedAt: 1,
     expiresAt: Date.now() + 60000,
     attestations,
+    ...overrides,
   };
 
   const body = new Element();
@@ -461,4 +472,33 @@ test('an unrecognised method is omitted rather than described, and oauth offers 
   assert.equal(older.cards.length, 2);
   assert.ok(!older.dialog.textContent.includes('Stated by'));
   assert.ok(!older.dialog.textContent.includes('Signed in with'));
+});
+
+test('a proof gone unread reads as unconfirmed, not as an approval that ran out', async () => {
+  const attestations = {
+    local: { by: 'backend', method: 'declared', confirmedAt: 1 },
+    external: {
+      by: 'provider',
+      method: 'attestation',
+      artifactUrl: 'https://gist.github.com/alice/abc',
+      confirmedAt: 1,
+    },
+  };
+
+  const stale = await renderDialog(attestations, { status: 'expired' });
+
+  assert.match(stale.dialog.textContent, /Unconfirmed/);
+  assert.ok(!stale.dialog.textContent.includes('Expired'));
+
+  // The approval itself is untouched, so the record still reads forward to its own end.
+  assert.match(stale.dialog.textContent, /Valid until/);
+
+  // The proof is still linked: an unread proof is not a withdrawn one.
+  assert.match(stale.dialog.textContent, /View the proof/);
+  assert.match(stale.dialog.textContent, /Last checked/);
+
+  const lapsed = await renderDialog(attestations, { status: 'expired', expiresAt: 1 });
+
+  assert.match(lapsed.dialog.textContent, /Expired on/);
+  assert.ok(!lapsed.dialog.textContent.includes('Unconfirmed'));
 });

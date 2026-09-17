@@ -25,12 +25,22 @@ const server = createServer((request, response) => {
   if (url.pathname.startsWith('/api/verity/connections/')) {
     const id = url.pathname.split('/').at(-1)!;
 
-    if (!['current', 'signed-in', 'expired', 'revoked'].includes(id)) {
+    if (!['current', 'signed-in', 'unconfirmed', 'expired', 'revoked'].includes(id)) {
       response.writeHead(404);
       response.end('Unavailable');
 
       return;
     }
+
+    // A published proof only holds while it is still published, so one tile shows a
+    // connection whose proof has gone unread: inside its approval, outside its freshness.
+    const proof = {
+      by: 'provider' as const,
+      method: 'attestation' as const,
+      artifactUrl: 'https://gist.github.com/joe/3f8a1c9e2b7d4506a1f2',
+      expect: 'Verity proof for JoeSite: 9Qv2bXkP',
+      confirmedAt: Date.now() - (id === 'unconfirmed' ? 9 * 86400000 : 3600000),
+    };
 
     const evidence: Evidence = {
       id,
@@ -41,27 +51,24 @@ const server = createServer((request, response) => {
       siteName: 'JoeSite',
       verifierName: 'JoeSite',
       visibility: 'public',
-      status: ['current', 'signed-in'].includes(id) ? 'verified' : (id as 'expired' | 'revoked'),
+      status: ['current', 'signed-in'].includes(id)
+        ? 'verified'
+        : id === 'revoked'
+          ? 'revoked'
+          : 'expired',
       authenticatedAt: Date.now() - 86400000,
       approvedAt: Date.now() - 86400000,
       visibilityApprovedAt: Date.now() - 86400000,
-      expiresAt: id === 'expired' ? Date.now() - 1000 : Date.now() + 86400000,
+      expiresAt: ['expired', 'revoked'].includes(id) ? Date.now() - 1000 : Date.now() + 86400000,
       evidenceUrl: `${origin}/demo`,
       attestations: {
         // The site is the only authority on its own namespace, so it states this side.
         local: { by: 'backend', method: 'declared', confirmedAt: Date.now() - 86400000 },
         // The same pair proved two ways, so the preview shows both: a gist anyone can
         // open and check, and a sign-in that publishes nothing.
-        external:
-          id === 'current'
-            ? {
-                by: 'provider',
-                method: 'attestation',
-                artifactUrl: 'https://gist.github.com/joe/3f8a1c9e2b7d4506a1f2',
-                expect: 'Verity proof for JoeSite: 9Qv2bXkP',
-                confirmedAt: Date.now() - 3600000,
-              }
-            : { by: 'provider', method: 'oauth', confirmedAt: Date.now() - 86400000 },
+        external: ['current', 'unconfirmed'].includes(id)
+          ? proof
+          : { by: 'provider', method: 'oauth', confirmedAt: Date.now() - 86400000 },
       },
     };
 

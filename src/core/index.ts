@@ -203,10 +203,45 @@ export interface Evidence {
   evidenceUrl: string;
 }
 
-export function status(connection: Connection, now: number): Status {
+/**
+ * How long a published proof stays good without being read again. An artifact method is
+ * only true while the artifact is still there, and the holder can delete it without
+ * telling anyone, so a confirmation is a heartbeat rather than a permanent fact.
+ */
+export const freshnessMs = 7 * 86400000;
+
+/**
+ * `freshness` bounds how stale a published proof may be before it stops counting. A
+ * backend that never rechecks must leave it unbounded, since an unread proof going stale
+ * is a statement about the recheck, and claiming one that never ran would be a lie.
+ */
+export function status(connection: Connection, now: number, freshness = freshnessMs): Status {
   if (connection.revokedAt !== undefined) return 'revoked';
 
-  return now >= connection.expiresAt ? 'expired' : 'verified';
+  if (now >= connection.expiresAt) return 'expired';
+
+  // A sign-in happened once and stays happened. A proof that has not been read lately is
+  // unconfirmed rather than disproved, which is why this reverses the moment it reads again.
+  const external = connection.attestations?.external;
+
+  if (external?.artifactUrl && freshness !== Infinity && now >= external.confirmedAt + freshness)
+    return 'expired';
+
+  return 'verified';
+}
+
+/**
+ * The word for a record's state. It separates the two ways one stops counting: an approval
+ * that ran out is over until the holder renews it, while a proof that has not been read
+ * lately is only unconfirmed and says so again the moment it reads. Both are `expired` as
+ * a status, since a reader should act the same way, but they do not mean the same thing.
+ */
+export function statusLabel(evidence: Pick<Evidence, 'status' | 'expiresAt'>, now: number): string {
+  if (evidence.status === 'revoked') return 'Revoked';
+
+  if (evidence.status === 'verified' && evidence.expiresAt > now) return 'Verified';
+
+  return evidence.expiresAt > now ? 'Unconfirmed' : 'Expired';
 }
 
 /**

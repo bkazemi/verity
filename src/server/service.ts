@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import {
+  freshnessMs,
   isArtifactProvider,
   status,
   type ArtifactProvider,
@@ -37,6 +38,11 @@ export interface ServiceOptions {
   validityMs?: number;
   flowTtlMs?: number;
   shareTtlMs?: number;
+  /** How stale a published proof may be before it stops counting. Infinity never expires. */
+  freshnessMs?: number;
+  /** How often recheck() reads a given proof again. Must be well under freshnessMs. */
+  recheckMs?: number;
+  recheckTimeoutMs?: number;
   now?: () => number;
 }
 
@@ -59,10 +65,31 @@ export class VerityService {
     )
       throw new Error('Use HTTPS (HTTP allowed on localhost)');
 
-    for (const duration of [options.validityMs, options.flowTtlMs, options.shareTtlMs]) {
+    for (const duration of [
+      options.validityMs,
+      options.flowTtlMs,
+      options.shareTtlMs,
+      options.recheckMs,
+      options.recheckTimeoutMs,
+    ]) {
       if (duration !== undefined && (!Number.isSafeInteger(duration) || duration <= 0))
         throw new Error('Invalid duration');
     }
+
+    if (
+      options.freshnessMs !== undefined &&
+      options.freshnessMs !== Infinity &&
+      (!Number.isSafeInteger(options.freshnessMs) || options.freshnessMs <= 0)
+    )
+      throw new Error('Invalid duration');
+
+    if (this.freshness <= (options.recheckMs ?? 86400000))
+      throw new Error('freshnessMs must exceed recheckMs');
+  }
+
+  /** A proof is only as fresh as the schedule that reads it, so both live together. */
+  private get freshness(): number {
+    return this.options.freshnessMs ?? freshnessMs;
   }
 
   validateLocal(local: LocalAccount): LocalAccount {
@@ -414,7 +441,7 @@ export class VerityService {
       siteName: this.options.siteName,
       verifierName: this.options.verifierName,
       visibility: connection.visibility,
-      status: status(connection, this.now()),
+      status: status(connection, this.now(), this.freshness),
       authenticatedAt: connection.authenticatedAt,
       approvedAt: connection.approvedAt,
       visibilityApprovedAt: connection.visibilityApprovedAt,
@@ -561,6 +588,92 @@ export class VerityService {
         linkExpiresAt: share.expiresAt,
       };
     });
+  }
+
+  /**
+   * Reads published proofs again, because unlike a sign-in they can stop being true with
+   * nobody told: the holder deletes the gist and the record here would go on claiming it.
+   *
+   * A failed read writes nothing. One refusal is not evidence the proof is gone, and a
+   * provider being down must not revoke anyone; it is continued silence that ages a
+   * connection out through `status`, and a single later success undoes that. Revocation
+   * stays what it is, something a party chose.
+   *
+   * `budget` bounds the reads per run, since providers rate-limit and the alarm this runs
+   * on is shared. Oldest first, so nothing starves however many connections are waiting.
+   */
+  async recheck(budget = 5): Promise<number> {
+    const provider = this.options.provider;
+
+    if (!isArtifactProvider(provider) || budget <= 0) return 0;
+
+    const interval = this.options.recheckMs ?? 86400000;
+    const now = this.now();
+
+    const due = await this.options.storage.transaction(async (tx) =>
+      (await tx.list('connections'))
+        .filter(
+          (c) =>
+            c.revokedAt === undefined &&
+            c.expiresAt > now &&
+            c.provider === provider.id &&
+            c.attestations?.external.artifactUrl &&
+            c.attestations.external.expect &&
+            c.attestations.external.confirmedAt + interval <= now,
+        )
+        .sort((a, b) => a.attestations!.external.confirmedAt - b.attestations!.external.confirmedAt)
+        .slice(0, budget),
+    );
+
+    let confirmed = 0;
+
+    // Serially and outside any transaction: storage here serializes writes, so holding one
+    // open across a fetch would stall every other request behind the slowest provider.
+    for (const connection of due) {
+      const { artifactUrl, expect } = connection.attestations!.external;
+
+      try {
+        const external = await this.deadline(
+          provider.verify({ artifactUrl: artifactUrl!, expect: expect! }),
+        );
+
+        // The proof must still be the same holder's. An account that changed hands has not
+        // reproved anything, whatever is published at the old address.
+        if (external.id !== connection.external.id) continue;
+      } catch {
+        continue;
+      }
+
+      await this.options.storage.transaction(async (tx) => {
+        const current = await tx.get('connections', connection.id);
+
+        // It may have been revoked or reproved while the fetch was in flight.
+        if (!current?.attestations || current.revokedAt !== undefined) return;
+
+        if (current.attestations.external.artifactUrl !== artifactUrl) return;
+
+        current.attestations.external.confirmedAt = this.now();
+        // For an artifact method this field means last confirmed, not first authenticated.
+        current.authenticatedAt = this.now();
+        await tx.put('connections', connection.id, current);
+      });
+
+      confirmed += 1;
+    }
+
+    return confirmed;
+  }
+
+  /** A provider that never answers must not hold up the maintenance run behind it. */
+  private deadline<T>(work: Promise<T>): Promise<T> {
+    let timer: ReturnType<typeof setTimeout>;
+
+    return Promise.race([
+      work.finally(() => clearTimeout(timer)),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Unavailable()), this.options.recheckTimeoutMs ?? 10000);
+      }),
+    ]);
   }
 
   /** Run periodically. Pending secrets expire immediately; historical evidence defaults to 90 days. */

@@ -1,5 +1,5 @@
 import type { DurableObjectNamespace, DurableObjectState } from '@cloudflare/workers-types';
-import type { Evidence } from '../src/core/index.js';
+import { statusLabel, type Evidence } from '../src/core/index.js';
 import { createVerity, githubProvider } from '../src/server/index.js';
 import { CloudflareStorage } from './storage.js';
 import { OwnerAuth } from './auth.js';
@@ -166,6 +166,9 @@ export class VerityStore {
     // Schedule first so transient cleanup failures never permanently stop maintenance.
     await this.ctx.storage.setAlarm(Date.now() + 3600000);
     await this.app.service.prune();
+    // Published proofs go stale on their own. A small budget per hour stays inside the
+    // rate limit a provider gives an unauthenticated caller, shared across this colo.
+    await this.app.service.recheck();
     await this.auth.prune();
   }
 
@@ -246,7 +249,7 @@ export class VerityStore {
   private connection(e: Evidence) {
     const embed = `<script src="/assets/verity.js" defer></script>\n<verity-badge backend-url="${this.env.PUBLIC_ORIGIN}/api/verity" connection-id="${e.id}"></verity-badge>`;
 
-    return `<section><h3>${escape(e.external.handle)}: ${escape(e.status)}</h3>
+    return `<section><h3>${escape(e.external.handle)}: ${escape(statusLabel(e, Date.now()))}</h3>
       <p>Visibility: ${escape(e.visibility)}. Expires: ${escape(new Date(e.expiresAt).toISOString())}</p>
       ${e.visibility === 'public' ? `<p><a href="${escape(e.evidenceUrl)}">Inspect evidence</a></p><label>Embed on your site<textarea readonly rows="4" cols="80">${escape(embed)}</textarea></label>` : '<p>Unlisted connections cannot appear in a public pill.</p>'}
       <p><a href="/api/verity/renew/${escape(e.id)}">Renew this connection</a>. Keeps the same connection ID, so embeds stay valid.</p>
