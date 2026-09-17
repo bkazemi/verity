@@ -1,4 +1,4 @@
-import { statusLabel, type Evidence } from '../core/index.js';
+import { externalName, statusLabel, type Evidence } from '../core/index.js';
 import { verificationMark } from './mark.js';
 import { providerMark } from './provider-mark.js';
 
@@ -75,7 +75,7 @@ export function renderBadge(element: HTMLElement, evidence: Evidence): HTMLAncho
 
   const label = statusLabel(evidence, Date.now());
 
-  const handle = `@${evidence.external.handle.replace(/^@/, '')}`;
+  const handle = externalName(evidence.external);
   const badge = frame(element, state) as HTMLAnchorElement;
   const mark = verificationMark(!current);
 
@@ -92,7 +92,10 @@ export function renderBadge(element: HTMLElement, evidence: Evidence): HTMLAncho
   const divider = span('divider', '');
 
   divider.setAttribute('aria-hidden', 'true');
-  badge.append(mark, divider, providerMark(evidence.provider, provider), span('name', handle));
+  const logo = providerMark(evidence.provider);
+
+  // A provider with no mark of its own is named instead, so the pill never drops it.
+  badge.append(mark, divider, logo ?? span('name', provider), span('name', handle));
 
   if (!current) {
     const icon = span('icon', state === 'expired' ? '◷' : '–');

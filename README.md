@@ -53,7 +53,13 @@ One package, one import path:
 import { init } from 'verity';
 
 // Backend
-import { createVerity, githubProvider, githubGistProvider, PostgresStorage } from 'verity';
+import {
+  createVerity,
+  githubProvider,
+  githubGistProvider,
+  pgpProvider,
+  PostgresStorage,
+} from 'verity';
 
 // Shared types
 import type { LocalAccount, Evidence } from 'verity';
@@ -90,8 +96,7 @@ const verity = createVerity({
     };
   },
 });
-// `githubGistProvider()` is the alternative: the holder publishes a public gist containing
-// a per-flow line and pastes its address back, which needs no OAuth app and no secret.
+// `githubGistProvider()` and `pgpProvider()` are the alternatives; see Proof methods below.
 // Your router calls verity.handle(Request), or mounts this Node callback:
 const handler = nodeHandler(verity.handle, 'https://community.example');
 ```
@@ -141,6 +146,33 @@ The static site hosts `dist/verity.js` and the badge markup. Run the verificatio
 
 Visitors can inspect the evidence in the pill's modal or follow its evidence link. Verification, renewal, and management happen on the backend's site; `connect()` requires a same-origin backend. Keep the backend available for status reads. The default verification expires after 30 days, and the pill stops showing an active verification when evidence expires, is revoked, or cannot be fetched. If your static site sets a Content Security Policy, allow the backend origin in `connect-src`.
 
+## Proof methods
+
+A provider answers _whose_ an account is; a method answers _how_ control of it was shown. The two multiply rather than enumerate, and none of them is ranked above the others: which proof convinces is the reader's call, which is the reason for publishing one instead of issuing a verdict.
+
+| Provider               | How the holder proves it                                                                           | Needs                                          |
+| ---------------------- | -------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| `githubProvider()`     | Signs in through GitHub and comes back.                                                            | An OAuth app, a client id and a client secret. |
+| `githubGistProvider()` | Publishes a public gist containing a per-flow line, and hands back its address.                    | Nothing.                                       |
+| `pgpProvider()`        | Signs a per-flow line with an OpenPGP key, and hands back the signed message and their public key. | Nothing.                                       |
+
+The last two are holder-paced: the flow stays on your origin while the holder goes away and publishes, instead of being one redirect. They differ in who keeps the proof, which is what `ArtifactProvider.artifact` says:
+
+- **`location`** — the holder publishes the proof somewhere only they can write and hands back an address. The address is half of what is proved, so the provider must refuse any address outside itself; an unpinned fetch is an open proxy. The proof can later be deleted, so it is reread on a schedule.
+- **`document`** — the holder hands over the proof itself and Verity publishes it at `<baseUrl>/connections/<id>/proof`, as `text/plain` a reader can drop straight into their own tools. Nothing is fetched to establish it.
+
+`pgpProvider()` is a `document` method because a key has no provider at all. Nobody operates it, nobody can transfer it, and there is no account table anywhere to consult: **the fingerprint is the identity**, and the address a signature was typed at proves nothing.
+
+A key is shown by the address on it, because that is what a reader recognises — forty hex digits are not. But an address is shown **only where two parties who cannot stand in for each other have both said it**: the key signed for it, and somebody who is not its holder publishes it.
+
+There are two sources for the second half. A keyserver that confirms addresses, and the mailbox's own domain: if `example.com` publishes the key at the [web key directory](https://datatracker.ietf.org/doc/draft-koch-openpgp-webkey-service/) location derived from `alice@example.com`, that is the domain owning the mailbox saying the two belong together — a better answer than a third party's, and the one that covers keys uploaded nowhere. The keyserver is asked first because it is a single request; the directory's two locations follow.
+
+Either one alone is worth nothing. Minting a key that self-certifies `<support@bank.example>` takes seconds, so an address on a key is only the key's word for itself, and printing it beside a real proof would read as established when nobody established anything. A keyserver saying it alone is no better, because Verity does not take the keyserver's word either: the served packets are checked against the key it already holds, so the keyserver is a courier that can stay silent but cannot put an address on a key or take one off. Anywhere no address is confirmed — not uploaded, keyserver down, keyserver lying — the fingerprint's short form stands in, and the proof itself is unaffected, because the proof never depended on a keyserver.
+
+The fingerprint is always carried beside the address, since a confirmation says only that somebody could read that mailbox on the day they confirmed it, while the fingerprint is the part nobody can claim their way into. A holder who wants their address shown is told so in the flow's instructions: publish the key and confirm the address first.
+
+The OpenPGP reader is written out rather than depended on, because a library arguing that you can check its claims should not first ask you to accept a megabyte of somebody else's cryptography. It parses armor, public-key and signature packets, and the cleartext framework, and verifies Ed25519, ECDSA and RSA through WebCrypto. It rejects SHA-1 signatures. A signing subkey counts, but only where the primary key signed a binding for it — otherwise anyone could staple their own subkey to a published key and sign as its holder.
+
 ## Contract and operations
 
 Defaults: verification lasts **30 days**, flows **10 minutes**, sharing links **7 days**. Configure `validityMs`, `flowTtlMs`, and `shareTtlMs` in milliseconds. All evidence responses use **no-store**; declarative badges refresh every **30 seconds** and remove their active presentation if refresh fails. Manual `mountBadge` calls render once; adopters must call again at least every 30 seconds. The evidence page is authoritative at request time. Nothing here claims continuous ownership.
@@ -154,6 +186,10 @@ A sign-in happened once and stays happened, so it needs no upkeep. A published p
 Each run reads the proofs that are due, oldest first, and takes a `budget` argument bounding how many it reads (default 5) because providers rate-limit unauthenticated callers. A proof is re-read every `recheckMs` (default 24 hours) and counts as current for `freshnessMs` after its last successful read (default 7 days); `freshnessMs` must exceed `recheckMs`, so a few failed reads in a row change nothing. Past that, the connection reports `expired` and drops out of `published()` until a later read succeeds. A failed read writes nothing at all: a provider being down is not a revocation, and nothing here revokes on the holder's behalf.
 
 **A backend that never calls `recheck()` must set `freshnessMs: Infinity`.** Otherwise every artifact-proved connection ages out after a week, correctly: a proof nobody reads is a proof nobody has confirmed. Renderers word that state as _Unconfirmed_ rather than _Expired_, since the approval itself has not run out.
+
+A proof Verity hosts cannot go missing behind your back, so it never goes stale and is marked `hosted` in the evidence. What can still change is the identity behind it, and a method with somewhere to say so is asked instead: `pgpProvider()` looks the fingerprint up on `keys.openpgp.org` (configurable via `keyserver`) and, if the key now carries a revocation, revokes the connection. That is a revocation rather than staleness, because publishing a revocation certificate is an affirmative act by the keyholder, and unlike staleness it does not reverse.
+
+The keyserver is never trusted. A revocation is a self-signature, checked against the key Verity already holds, so a hostile or MITM'd keyserver cannot revoke anyone's links — it can only withhold a revocation, which is the same as being unreachable. A key that was never uploaded has nowhere for a revocation to be, and silence is not read as one.
 
 ## Formatting
 

@@ -200,7 +200,7 @@
       }
       .state-grid {
         display: grid;
-        grid-template-columns: 1fr 1fr 1fr;
+        grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
         gap: 12px;
       }
       .state {
@@ -226,8 +226,7 @@
         color: #787255;
       }
       @media (max-width: 760px) {
-        .stage,
-        .state-grid {
+        .stage {
           grid-template-columns: 1fr;
         }
         aside {
@@ -308,6 +307,10 @@
             <span class="eyebrow">Unavailable</span
             ><verity-badge backend-url="/api/verity" connection-id="missing"></verity-badge>
           </div>
+          <div class="state">
+            <span class="eyebrow">Proof gone unread</span
+            ><verity-badge backend-url="/api/verity" connection-id="unconfirmed"></verity-badge>
+          </div>
         </div>
       </section>
       <section class="states">
@@ -325,8 +328,8 @@
             ><verity-badge backend-url="/api/verity" connection-id="signed-in"></verity-badge>
           </div>
           <div class="state">
-            <span class="eyebrow">Proof gone unread</span
-            ><verity-badge backend-url="/api/verity" connection-id="unconfirmed"></verity-badge>
+            <span class="eyebrow">Signed with a key</span
+            ><verity-badge backend-url="/api/verity" connection-id="signed"></verity-badge>
           </div>
         </div>
       </section>

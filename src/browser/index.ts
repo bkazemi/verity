@@ -228,6 +228,8 @@ function validEvidence(value: unknown): value is Evidence {
     (value.providerName === undefined || typeof value.providerName === 'string') &&
     validAttestations(value.attestations) &&
     (value.local.kind === undefined || typeof value.local.kind === 'string') &&
+    (value.external.kind === undefined ||
+      ['account', 'key'].includes(String(value.external.kind))) &&
     (value.revokedAt === undefined ||
       (typeof value.revokedAt === 'number' && Number.isFinite(value.revokedAt))) &&
     ['verified', 'expired', 'revoked'].includes(String(value.status)) &&

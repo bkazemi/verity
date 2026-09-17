@@ -22,10 +22,21 @@ const server = createServer((request, response) => {
     return;
   }
 
+  // The proof a key-signed connection points at, served as the text a reader would check.
+  if (url.pathname === '/api/verity/connections/signed/proof') {
+    response.setHeader('Content-Type', 'text/plain; charset=utf-8');
+
+    response.end(
+      `-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA512\n\nVerity proof for JoeSite: 9Qv2bXkP\n-----BEGIN PGP SIGNATURE-----\n\n(demo: not a real signature)\n-----END PGP SIGNATURE-----\n`,
+    );
+
+    return;
+  }
+
   if (url.pathname.startsWith('/api/verity/connections/')) {
     const id = url.pathname.split('/').at(-1)!;
 
-    if (!['current', 'signed-in', 'unconfirmed', 'expired', 'revoked'].includes(id)) {
+    if (!['current', 'signed-in', 'signed', 'unconfirmed', 'expired', 'revoked'].includes(id)) {
       response.writeHead(404);
       response.end('Unavailable');
 
@@ -42,16 +53,35 @@ const server = createServer((request, response) => {
       confirmedAt: Date.now() - (id === 'unconfirmed' ? 9 * 86400000 : 3600000),
     };
 
+    // A key proves itself, so the proof is held here rather than read somewhere else, and
+    // it is addressed by the connection it belongs to.
+    const signature = {
+      by: 'provider' as const,
+      method: 'signature' as const,
+      artifactUrl: `${origin}/api/verity/connections/${id}/proof`,
+      expect: 'Verity proof for JoeSite: 9Qv2bXkP',
+      hosted: true,
+      confirmedAt: Date.now() - 3600000,
+    };
+
     const evidence: Evidence = {
       id,
       local: { label: 'Joe', reference: 'joesite-member-1' },
-      external: { id: 'demo-account', handle: 'Joe', profileUrl: `${origin}/demo` },
-      provider: 'github',
-      providerName: 'GitHub',
+      external:
+        id === 'signed'
+          ? {
+              id: '7FDEB37E4F6EAD8E2FEFD8511347D93FEB1342AF',
+              kind: 'key',
+              handle: 'joe@joesite.example',
+              profileUrl: `${origin}/demo`,
+            }
+          : { id: 'demo-account', handle: 'Joe', profileUrl: `${origin}/demo` },
+      provider: id === 'signed' ? 'openpgp' : 'github',
+      providerName: id === 'signed' ? 'OpenPGP' : 'GitHub',
       siteName: 'JoeSite',
       verifierName: 'JoeSite',
       visibility: 'public',
-      status: ['current', 'signed-in'].includes(id)
+      status: ['current', 'signed-in', 'signed'].includes(id)
         ? 'verified'
         : id === 'revoked'
           ? 'revoked'
@@ -66,9 +96,12 @@ const server = createServer((request, response) => {
         local: { by: 'backend', method: 'declared', confirmedAt: Date.now() - 86400000 },
         // The same pair proved two ways, so the preview shows both: a gist anyone can
         // open and check, and a sign-in that publishes nothing.
-        external: ['current', 'unconfirmed'].includes(id)
-          ? proof
-          : { by: 'provider', method: 'oauth', confirmedAt: Date.now() - 86400000 },
+        external:
+          id === 'signed'
+            ? signature
+            : ['current', 'unconfirmed'].includes(id)
+              ? proof
+              : { by: 'provider', method: 'oauth', confirmedAt: Date.now() - 86400000 },
       },
     };
 

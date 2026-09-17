@@ -185,11 +185,10 @@ export class VerityService {
   }
 
   /**
-   * Accepts the location the holder says they published the flow's string at, reads it, and
-   * records whose account published it. The url is holder-supplied, so the provider is
-   * responsible for refusing anything outside itself.
+   * Accepts what the holder hands back: the address they published the flow's string at,
+   * or the proof itself. Both are holder-supplied, so the provider decides what counts.
    */
-  async submit(id: string, binding: string, artifactUrl: string): Promise<string> {
+  async submit(id: string, binding: string, artifact: string): Promise<string> {
     const provider = this.options.provider;
 
     if (!isArtifactProvider(provider)) throw new Unavailable();
@@ -206,9 +205,9 @@ export class VerityService {
     });
 
     try {
-      const external = await provider.verify({ artifactUrl, expect });
+      const external = await provider.verify({ artifact, expect });
 
-      await this.established(id, binding, external, artifactUrl);
+      await this.established(id, binding, external, artifact);
     } catch {
       await this.failed(id);
     }
@@ -272,7 +271,7 @@ export class VerityService {
     id: string,
     binding: string,
     external: ExternalAccount,
-    artifactUrl?: string,
+    artifact?: string,
   ) {
     if (
       typeof external.id !== 'string' ||
@@ -304,7 +303,7 @@ export class VerityService {
       }
 
       flow.external = external;
-      flow.artifactUrl = artifactUrl;
+      flow.artifact = artifact;
       flow.authenticatedAt = this.now();
       flow.phase = 'approval';
       await tx.put('flows', id, flow);
@@ -355,8 +354,11 @@ export class VerityService {
       let connection: Connection;
 
       if (flow.kind === 'connect') {
+        // The id exists before the record does, because a hosted proof is addressed by it.
+        const connectionId = secret();
+
         connection = {
-          id: secret(),
+          id: connectionId,
           local: flow.local!,
           external: flow.external!,
           provider: this.options.provider.id,
@@ -365,7 +367,8 @@ export class VerityService {
           authenticatedAt: flow.authenticatedAt!,
           approvedAt: this.now(),
           expiresAt: this.now() + (this.options.validityMs ?? 30 * 86400000),
-          attestations: this.attestations(flow),
+          attestations: this.attestations(flow, connectionId),
+          proof: this.hosted() ? flow.artifact : undefined,
         };
       } else {
         const existing = await tx.get('connections', flow.connectionId!);
@@ -394,7 +397,9 @@ export class VerityService {
           connection.revocationReason = undefined;
           // Both sides were just re-established: the holder reauthenticated and the site
           // reasserted the subject it displays. A visibility change re-establishes neither.
-          connection.attestations = this.attestations(flow);
+          connection.attestations = this.attestations(flow, connection.id);
+
+          if (this.hosted()) connection.proof = flow.artifact;
         } else if (flow.kind === 'revoke') {
           connection.revokedAt = this.now();
           connection.revocationReason = 'external';
@@ -456,21 +461,58 @@ export class VerityService {
    * on its own namespace, so it declares the local subject; the provider establishes the
    * external account by whatever method its implementation uses.
    */
-  private attestations(flow: Flow): Attestations {
+  private attestations(flow: Flow, connectionId: string): Attestations {
+    const provider = this.options.provider;
+
     const external: Attestation = {
       by: 'provider',
-      method: this.options.provider.method ?? 'oauth',
+      method: provider.method ?? 'oauth',
       confirmedAt: flow.authenticatedAt!,
     };
 
     // Only a published proof has somewhere for a reader to go, and it is kept with what
-    // they should find there so the same check can be run again later.
-    if (flow.artifactUrl) {
-      external.artifactUrl = flow.artifactUrl;
+    // they should find there so the same check can be run again later. Where that is
+    // depends on who holds it: an address the holder published, or this backend's own
+    // copy when the proof is a document that stands up wherever it is read.
+    if (flow.artifact && isArtifactProvider(provider)) {
+      const hosted = provider.artifact === 'document';
+
+      external.artifactUrl = hosted
+        ? `${this.baseUrl}/connections/${connectionId}/proof`
+        : flow.artifact;
+
       external.expect = flow.expect;
+
+      if (hosted) external.hosted = true;
     }
 
     return { local: { by: 'backend', method: 'declared', confirmedAt: this.now() }, external };
+  }
+
+  /** Whether the configured provider hands over a proof for this backend to publish. */
+  private hosted(): boolean {
+    const provider = this.options.provider;
+
+    return isArtifactProvider(provider) && provider.artifact === 'document';
+  }
+
+  /**
+   * The proof itself, for a method whose artifact this backend publishes. It is as public
+   * as the evidence it belongs to and no more: an unlisted record's proof is the holder's
+   * to hand out, exactly like the evidence page it is linked from.
+   */
+  async proof(id: string, local?: LocalAccount): Promise<string> {
+    return this.options.storage.transaction(async (tx) => {
+      const connection = await tx.get('connections', id);
+
+      if (
+        !connection?.proof ||
+        (connection.visibility !== 'public' && connection.local.id !== local?.id)
+      )
+        throw new Unavailable();
+
+      return connection.proof;
+    });
   }
 
   /** A record from a provider this instance no longer configures keeps its raw id. */
@@ -591,8 +633,16 @@ export class VerityService {
   }
 
   /**
-   * Reads published proofs again, because unlike a sign-in they can stop being true with
-   * nobody told: the holder deletes the gist and the record here would go on claiming it.
+   * Asks again about proofs, because unlike a sign-in they can stop being true with nobody
+   * told. What that means depends on who holds the proof:
+   *
+   * A proof published elsewhere is reread. The holder deletes the gist and this record
+   * would otherwise go on claiming it, so continued silence ages the connection out.
+   *
+   * A proof this backend hosts cannot go missing, so there is nothing to reread. What can
+   * still change is the identity behind it, and a method that has somewhere to say so is
+   * asked. A holder who publishes a revocation for their key has withdrawn it, which is a
+   * revocation of the connection rather than a proof gone stale.
    *
    * A failed read writes nothing. One refusal is not evidence the proof is gone, and a
    * provider being down must not revoke anyone; it is continued silence that ages a
@@ -601,11 +651,16 @@ export class VerityService {
    *
    * `budget` bounds the reads per run, since providers rate-limit and the alarm this runs
    * on is shared. Oldest first, so nothing starves however many connections are waiting.
+   *
+   * Returns how many were confirmed. A connection revoked here is not one of them.
    */
   async recheck(budget = 5): Promise<number> {
     const provider = this.options.provider;
 
+    // A hosted proof is only worth asking about when the method has somewhere to ask.
     if (!isArtifactProvider(provider) || budget <= 0) return 0;
+
+    if (provider.artifact === 'document' && !provider.withdrawn) return 0;
 
     const interval = this.options.recheckMs ?? 86400000;
     const now = this.now();
@@ -619,6 +674,7 @@ export class VerityService {
             c.provider === provider.id &&
             c.attestations?.external.artifactUrl &&
             c.attestations.external.expect &&
+            (provider.artifact === 'location' ? !c.attestations.external.hosted : c.proof) &&
             c.attestations.external.confirmedAt + interval <= now,
         )
         .sort((a, b) => a.attestations!.external.confirmedAt - b.attestations!.external.confirmedAt)
@@ -631,34 +687,52 @@ export class VerityService {
     // open across a fetch would stall every other request behind the slowest provider.
     for (const connection of due) {
       const { artifactUrl, expect } = connection.attestations!.external;
+      let withdrawn = false;
 
       try {
-        const external = await this.deadline(
-          provider.verify({ artifactUrl: artifactUrl!, expect: expect! }),
-        );
+        if (provider.artifact === 'document')
+          withdrawn = await this.deadline(
+            provider.withdrawn!(connection.external, connection.proof!),
+          );
+        else {
+          const external = await this.deadline(
+            provider.verify({ artifact: artifactUrl!, expect: expect! }),
+          );
 
-        // The proof must still be the same holder's. An account that changed hands has not
-        // reproved anything, whatever is published at the old address.
-        if (external.id !== connection.external.id) continue;
+          // The proof must still be the same holder's. An account that changed hands has
+          // not reproved anything, whatever is published at the old address.
+          if (external.id !== connection.external.id) continue;
+        }
       } catch {
         continue;
       }
 
-      await this.options.storage.transaction(async (tx) => {
+      confirmed += await this.options.storage.transaction(async (tx) => {
         const current = await tx.get('connections', connection.id);
 
         // It may have been revoked or reproved while the fetch was in flight.
-        if (!current?.attestations || current.revokedAt !== undefined) return;
+        if (!current?.attestations || current.revokedAt !== undefined) return 0;
 
-        if (current.attestations.external.artifactUrl !== artifactUrl) return;
+        if (current.attestations.external.artifactUrl !== artifactUrl) return 0;
+
+        // The holder said this identity is no longer theirs, which is a choice, not decay.
+        if (withdrawn) {
+          current.revokedAt = this.now();
+          current.revocationReason = 'withdrawn';
+          await tx.put('connections', connection.id, current);
+          await this.invalidateShare(tx, connection.id);
+          await this.audit(tx, connection.id, 'revoke', 'external');
+
+          return 0;
+        }
 
         current.attestations.external.confirmedAt = this.now();
         // For an artifact method this field means last confirmed, not first authenticated.
         current.authenticatedAt = this.now();
         await tx.put('connections', connection.id, current);
-      });
 
-      confirmed += 1;
+        return 1;
+      });
     }
 
     return confirmed;

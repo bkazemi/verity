@@ -93,22 +93,63 @@ export function fakeArtifactProvider(): ArtifactProvider & {
     id: 'notes',
     name: 'Notes',
     method: 'attestation',
+    artifact: 'location',
     artifacts,
     externalId: '42',
     calls: 0,
     instructions: (expect) => `Publish this line: ${expect}`,
-    verify({ artifactUrl, expect }) {
+    verify({ artifact, expect }) {
       this.calls += 1;
 
-      if (new URL(artifactUrl).host !== 'notes.test') throw new Error('Not a notes address');
+      if (new URL(artifact).host !== 'notes.test') throw new Error('Not a notes address');
 
-      if (artifacts.get(artifactUrl) !== expect) throw new Error('Line not found');
+      if (artifacts.get(artifact) !== expect) throw new Error('Line not found');
 
       return Promise.resolve({
         id: this.externalId,
         handle: 'alice',
         profileUrl: 'https://notes.test/alice',
       });
+    },
+  };
+}
+
+/**
+ * A provider whose proof this backend publishes rather than reads. Nothing is fetched to
+ * establish it; the only thing left to ask later is whether the holder withdrew the
+ * identity, which is what `gone` stands in for.
+ */
+export function fakeDocumentProvider(): ArtifactProvider & {
+  gone: boolean;
+  fail: boolean;
+  externalId: string;
+  calls: number;
+} {
+  return {
+    id: 'keys',
+    name: 'Keys',
+    method: 'signature',
+    artifact: 'document',
+    gone: false,
+    fail: false,
+    externalId: 'FINGERPRINT',
+    calls: 0,
+    instructions: (expect) => `Sign this line and paste the result: ${expect}`,
+    verify({ artifact, expect }) {
+      if (!artifact.includes(expect)) throw new Error('Line not signed');
+
+      return Promise.resolve({
+        id: this.externalId,
+        handle: 'AAAA BBBB',
+        profileUrl: 'https://keys.test/AAAABBBB',
+      });
+    },
+    withdrawn() {
+      this.calls += 1;
+
+      if (this.fail) throw new Error('Keyserver unavailable');
+
+      return Promise.resolve(this.gone);
     },
   };
 }

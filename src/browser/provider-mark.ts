@@ -1,22 +1,22 @@
-/** GitHub mark from Primer Octicons (MIT); license in docs/licenses/octicons.txt. */
-export function providerMark(provider: string, name = provider): SVGSVGElement | HTMLSpanElement {
-  if (provider !== 'github') {
-    const label = document.createElement('span');
+const namespace = 'http://www.w3.org/2000/svg';
 
-    label.textContent = name;
-
-    return label;
-  }
-
-  const namespace = 'http://www.w3.org/2000/svg';
+function mark(): SVGSVGElement {
   const svg = document.createElementNS(namespace, 'svg');
-  const path = document.createElementNS(namespace, 'path');
 
   svg.setAttribute('viewBox', '0 0 16 16');
   svg.setAttribute('class', 'provider');
-  svg.setAttribute('fill', 'currentColor');
   svg.setAttribute('aria-hidden', 'true');
   svg.setAttribute('focusable', 'false');
+
+  return svg;
+}
+
+/** GitHub mark from Primer Octicons (MIT); license in docs/licenses/octicons.txt. */
+function github(): SVGSVGElement {
+  const svg = mark();
+  const path = document.createElementNS(namespace, 'path');
+
+  svg.setAttribute('fill', 'currentColor');
 
   path.setAttribute(
     'd',
@@ -26,4 +26,45 @@ export function providerMark(provider: string, name = provider): SVGSVGElement |
   svg.append(path);
 
   return svg;
+}
+
+/**
+ * A key, drawn here rather than taken from anywhere. It is not the OpenPGP logo: that mark
+ * is somebody's to license and this repository does not ship artwork it cannot account for.
+ * A key is also the truer picture, since what was proved is control of one, not membership
+ * of an organisation.
+ */
+function key(): SVGSVGElement {
+  const svg = mark();
+
+  svg.setAttribute('fill', 'none');
+
+  for (const d of [
+    'M7.4 8.6a3.3 3.3 0 1 0-4.7 4.7 3.3 3.3 0 0 0 4.7-4.7Z',
+    'M7.4 8.6 14 2',
+    'M11.2 4.8l1.6 1.6',
+    'M9.4 6.6l1.6 1.6',
+  ]) {
+    const path = document.createElementNS(namespace, 'path');
+
+    path.setAttribute('d', d);
+    path.setAttribute('stroke', 'currentColor');
+    path.setAttribute('stroke-width', '1.6');
+    path.setAttribute('stroke-linecap', 'round');
+    path.setAttribute('stroke-linejoin', 'round');
+    svg.append(path);
+  }
+
+  return svg;
+}
+
+/**
+ * The mark for a provider, or nothing where there is none. Returning nothing rather than
+ * the provider's name keeps this to one job: a caller that also writes the name would
+ * otherwise print it twice, and only the caller knows where the name belongs.
+ */
+export function providerMark(provider: string): SVGSVGElement | undefined {
+  const marks: Record<string, () => SVGSVGElement> = { github, openpgp: key };
+
+  return marks[provider]?.();
 }

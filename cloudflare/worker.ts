@@ -47,6 +47,9 @@ const redirect = (cookie: string) =>
     headers: { ...safeHeaders, Location: '/', 'Set-Cookie': cookie },
   });
 
+/** Matches the library's own bound: large enough for a pasted key, small enough to buffer. */
+const maxBodyBytes = 65536;
+
 /** Buffer only bounded request bodies before passing them to the library. */
 async function boundedBody(request: Request): Promise<ArrayBuffer | undefined> {
   if (!request.body) return;
@@ -62,7 +65,7 @@ async function boundedBody(request: Request): Promise<ArrayBuffer | undefined> {
 
     length += value.byteLength;
 
-    if (length > 8192) {
+    if (length > maxBodyBytes) {
       await reader.cancel();
 
       throw new Error('Body too large');

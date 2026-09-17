@@ -18,6 +18,11 @@ export interface LocalAccount {
 
 export interface ExternalAccount {
   id: string;
+  /**
+   * What the other side is. Absent means an account, which is what a provider issues and
+   * can reassign. A key is not an account: nobody issued it and nobody can hand it over.
+   */
+  kind?: 'account' | 'key';
   handle: string;
   profileUrl: string;
 }
@@ -46,6 +51,11 @@ export interface Attestation {
   method: Method;
   /** Public location of the proof. Never a sharing link or any other secret. */
   artifactUrl?: string;
+  /**
+   * True when this backend serves the proof itself rather than reading it somewhere else.
+   * A hosted proof cannot go missing behind our back, so it never needs reconfirming.
+   */
+  hosted?: boolean;
   /** What a reader should expect to find at artifactUrl, such as a challenge token. */
   expect?: string;
   /**
@@ -75,6 +85,8 @@ export interface Connection {
   revocationReason?: string;
   /** Absent on records written before methods were recorded; evidence infers those. */
   attestations?: Attestations;
+  /** The proof itself, for a method whose artifact this backend publishes rather than reads. */
+  proof?: string;
 }
 
 export interface Flow {
@@ -95,8 +107,8 @@ export interface Flow {
    * unguessable and per-flow, so an artifact made for one flow cannot complete another.
    */
   expect?: string;
-  /** Where the holder published it, kept so the proof stays open to the reader. */
-  artifactUrl?: string;
+  /** What the holder handed back: an address to read, or the proof itself. */
+  artifact?: string;
 }
 
 export interface Share {
@@ -162,14 +174,27 @@ export interface ArtifactProvider {
   id: string;
   name: string;
   method: Exclude<Method, 'declared' | 'oauth'>;
+  /**
+   * Where the proof lives. `location` means the holder publishes it somewhere only they
+   * can write and hands back an address, so the address is half of what is proved.
+   * `document` means they hand back the proof itself and this backend publishes it,
+   * because a signature proves itself and where it was typed proves nothing at all.
+   */
+  artifact: 'location' | 'document';
   /** Told to the holder verbatim. Must name what they are publishing and where. */
   instructions(expect: string): string;
   /**
-   * Reads the artifact the holder points at and returns whose it is. Must confirm the
-   * artifact contains `expect` and is publicly readable, and must refuse any location
-   * outside the provider, since the holder chooses this url.
+   * Reads what the holder handed back and returns whose it is. Must confirm it contains
+   * `expect`. A `location` provider must also refuse any address outside itself, since
+   * the holder chooses that address and an unpinned fetch is an open proxy.
    */
-  verify(input: { artifactUrl: string; expect: string }): Promise<ExternalAccount>;
+  verify(input: { artifact: string; expect: string }): Promise<ExternalAccount>;
+  /**
+   * Whether the holder has since withdrawn the identity itself, wherever such a statement
+   * is published. This revokes the connection, so it must be something the holder stated
+   * and this provider verified, never something a third party merely asserted.
+   */
+  withdrawn?(account: ExternalAccount, artifact: string): Promise<boolean>;
 }
 
 export type Provider = RedirectProvider | ArtifactProvider;
@@ -224,7 +249,12 @@ export function status(connection: Connection, now: number, freshness = freshnes
   // unconfirmed rather than disproved, which is why this reverses the moment it reads again.
   const external = connection.attestations?.external;
 
-  if (external?.artifactUrl && freshness !== Infinity && now >= external.confirmedAt + freshness)
+  if (
+    external?.artifactUrl &&
+    !external.hosted &&
+    freshness !== Infinity &&
+    now >= external.confirmedAt + freshness
+  )
     return 'expired';
 
   return 'verified';
@@ -242,6 +272,15 @@ export function statusLabel(evidence: Pick<Evidence, 'status' | 'expiresAt'>, no
   if (evidence.status === 'verified' && evidence.expiresAt > now) return 'Verified';
 
   return evidence.expiresAt > now ? 'Unconfirmed' : 'Expired';
+}
+
+/**
+ * How to write an external subject's name. The @ that marks a handle is a claim that there
+ * is an account behind it, issued by somebody who could also take it away. A key has no
+ * account and no handle: it is named by its own fingerprint, so it is written as it is.
+ */
+export function externalName(external: ExternalAccount): string {
+  return external.kind === 'key' ? external.handle : `@${external.handle.replace(/^@/, '')}`;
 }
 
 /**

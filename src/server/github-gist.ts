@@ -14,10 +14,11 @@ export function githubGistProvider(options: { fetch?: typeof fetch } = {}): Arti
     id: 'github',
     name: 'GitHub',
     method: 'attestation',
+    artifact: 'location',
     instructions: (expect) =>
       `Create a public gist at https://gist.github.com containing this line exactly, then paste the gist address below: ${expect}`,
-    async verify({ artifactUrl, expect }): Promise<ExternalAccount> {
-      const url = new URL(artifactUrl);
+    async verify({ artifact, expect }): Promise<ExternalAccount> {
+      const url = new URL(artifact);
 
       // The holder chooses this url, so nothing outside gist.github.com is ever fetched.
       if (url.protocol !== 'https:' || url.host !== 'gist.github.com')

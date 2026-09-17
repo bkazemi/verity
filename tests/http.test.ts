@@ -1,7 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createVerity } from '../src/server/index.js';
-import { alice, bob, fakeArtifactProvider, fakeProvider, MemoryStorage } from './helpers.js';
+import {
+  alice,
+  bob,
+  fakeArtifactProvider,
+  fakeDocumentProvider,
+  fakeProvider,
+  MemoryStorage,
+} from './helpers.js';
 
 function fixture(provider = fakeProvider() as Parameters<typeof createVerity>[0]['provider']) {
   const app = createVerity({
@@ -256,7 +263,7 @@ test('a holder-paced proof is published here, submitted here, and approved here'
 
   assert.match(body, /Publish this line/);
   assert.match(body, /Verity proof for Site: /);
-  assert.match(body, /name="artifactUrl"/);
+  assert.match(body, /name="artifact"/);
 
   // Another local account cannot watch someone else's flow.
   const stranger = await f.request(path, { headers: { cookie: `${cookie}; local=bob` } });
@@ -275,7 +282,7 @@ test('a holder-paced proof is published here, submitted here, and approved here'
       cookie: `${cookie}; local=alice`,
       'content-type': 'application/x-www-form-urlencoded',
     },
-    body: `artifactUrl=${encodeURIComponent(url)}`,
+    body: `artifact=${encodeURIComponent(url)}`,
   });
 
   assert.equal(submitted.status, 303);
@@ -302,4 +309,68 @@ test('a holder-paced proof is published here, submitted here, and approved here'
   assert.match(page, /Published a proof on Notes/);
   assert.match(page, /View the proof/);
   assert.ok(page.includes(url));
+});
+
+test('a proof handed over is taken as text, published here, and served as text', async () => {
+  const provider = fakeDocumentProvider();
+  const f = fixture(provider);
+
+  const start = await f.request('/sessions?kind=connect', { headers: { cookie: 'local=alice' } });
+  const cookie = start.headers.get('set-cookie')!.split(';')[0]!;
+  const path = start.headers.get('location')!.replace('/api/verity', '');
+
+  const body = await (
+    await f.request(path, { headers: { cookie: `${cookie}; local=alice` } })
+  ).text();
+
+  // Nowhere to publish and no address to give back, so the page takes the proof itself.
+  assert.match(body, /name="artifact"/);
+  assert.match(body, /<textarea/);
+  assert.ok(!body.includes('type="url"'));
+
+  const expect = body.match(/<output>([^<]+)<\/output>/)![1]!;
+  const proof = `-----BEGIN SOMETHING-----\n${expect}\n-----END SOMETHING-----`;
+
+  const submitted = await f.request(`${path}/submit`, {
+    method: 'POST',
+    headers: {
+      origin: 'https://site.test',
+      cookie: `${cookie}; local=alice`,
+      'content-type': 'application/x-www-form-urlencoded',
+    },
+    body: `artifact=${encodeURIComponent(proof)}`,
+  });
+
+  assert.equal(submitted.status, 303);
+
+  await f.request(`${path}/approve`, {
+    method: 'POST',
+    headers: { origin: 'https://site.test', cookie: `${cookie}; local=alice` },
+    body: 'visibility=public&action=approve',
+  });
+
+  const evidence = (await f.app.service.mine(alice))[0]!;
+  const at = `/connections/${evidence.id}/proof`;
+
+  assert.equal(evidence.attestations!.external.artifactUrl, `https://site.test/api/verity${at}`);
+  assert.equal(evidence.attestations!.external.hosted, true);
+
+  const served = await f.request(at);
+
+  // Served as the bytes it is, so a reader can put it into their own tools unchanged.
+  assert.equal(served.status, 200);
+  assert.equal(served.headers.get('content-type'), 'text/plain; charset=utf-8');
+  assert.equal(served.headers.get('x-content-type-options'), 'nosniff');
+  assert.equal(await served.text(), proof);
+
+  // The evidence page points a reader at it rather than describing what it said.
+  const page = await (await f.request(`/connections/${evidence.id}`)).text();
+
+  assert.match(page, /Proved with a signature/);
+  assert.match(page, /View the proof/);
+
+  // A connection with no proof of its own has nothing to serve under that address.
+  const missing = await f.request('/connections/nonexistent/proof');
+
+  assert.equal(missing.status, 404);
 });

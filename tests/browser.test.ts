@@ -195,7 +195,42 @@ test('distributed badge renders current/expired/revoked evidence and fails close
   await client.mountBadge(element, { connectionId: 'original' });
   assert.match(element.textContent, /Unconfirmed/);
   assert.ok(!element.textContent.includes('Expired'));
-  evidence = { ...evidence, status: 'revoked', expiresAt: 1 };
+
+  // A key in the pill: its own mark, its fingerprint, and no @ in front of it.
+  evidence = {
+    ...evidence,
+    status: 'verified',
+    provider: 'openpgp',
+    providerName: 'OpenPGP',
+    external: {
+      id: 'FPR',
+      kind: 'key',
+      handle: 'alice@example.test',
+      profileUrl: 'https://k.test',
+    },
+  };
+
+  await client.mountBadge(element, { connectionId: 'original' });
+
+  const pill: string = element.textContent;
+
+  // The address a reader knows, written as it is. An @ in front would read as
+  // @alice@example.test, and it was never a handle to begin with.
+  assert.equal(pill, 'alice@example.test');
+  assert.ok(!pill.startsWith('@'));
+  assert.ok(!pill.includes('OpenPGP'));
+  assert.equal(element.find('svg').length, 2);
+  assert.equal(element.find('svg')[1]!.attributes['class'], 'provider');
+
+  evidence = {
+    ...evidence,
+    provider: 'github',
+    providerName: 'GitHub',
+    external: { id: '42', handle: '<Alice>', profileUrl: 'https://github.com/alice' },
+    status: 'revoked',
+    expiresAt: 1,
+  };
+
   await client.mountBadge(element, { connectionId: 'original' });
   assert.match(element.textContent, /Revoked/);
   assert.equal(element.find('svg').length, 2);
@@ -262,7 +297,7 @@ test('distributed badge renders current/expired/revoked evidence and fails close
       ['#149766', '#D3444C'],
     );
 
-    assert.ok(!element.textContent.includes('<Alice>'));
+    assert.ok(!(element.textContent as string).includes('<Alice>'));
     evidence = previous;
   }
 });
@@ -501,4 +536,62 @@ test('a proof gone unread reads as unconfirmed, not as an approval that ran out'
 
   assert.match(lapsed.dialog.textContent, /Expired on/);
   assert.ok(!lapsed.dialog.textContent.includes('Unconfirmed'));
+});
+
+test('a key is named by its fingerprint, with no @ and the provider written once', async () => {
+  const fingerprint = '7FDEB37E4F6EAD8E2FEFD8511347D93FEB1342AF';
+
+  const { cards } = await renderDialog(
+    {
+      local: { by: 'backend', method: 'declared', confirmedAt: 1 },
+      external: {
+        by: 'provider',
+        method: 'signature',
+        artifactUrl: 'https://verifier.test/api/verity/connections/c1/proof',
+        hosted: true,
+        confirmedAt: 2,
+      },
+    },
+    {
+      provider: 'openpgp',
+      providerName: 'OpenPGP',
+      external: {
+        id: fingerprint,
+        kind: 'key',
+        handle: 'alice@example.test',
+        profileUrl: 'https://keys.example/search',
+      },
+    },
+  );
+
+  const external = cards[1]!;
+
+  // The address the key signed for, above the fingerprint that is the actual identity.
+  assert.match(external.textContent, /alice@example\.test/);
+  assert.match(external.textContent, new RegExp(fingerprint));
+
+  // No @ in front of it: it is not a handle, and @alice@example.test is not a name.
+  assert.ok(!external.textContent.includes('@alice'));
+
+  // The heading carries a mark and the name. It used to carry the name twice, because the
+  // mark fell back to writing it whenever a provider had none of its own.
+  const heading = external.find('h3')[0]!;
+
+  assert.equal(heading.textContent, 'OpenPGP');
+  assert.equal(external.textContent.split('OpenPGP').length - 1, 1);
+  assert.equal(heading.find('svg')[0]!.attributes['class'], 'provider');
+  assert.match(external.textContent, /Proved with a signature/);
+});
+
+test('an account still reads as a handle, and its provider mark is still drawn', async () => {
+  const { cards } = await renderDialog({
+    local: { by: 'backend', method: 'declared', confirmedAt: 1 },
+    external: { by: 'provider', method: 'oauth', confirmedAt: 2 },
+  });
+
+  const heading = cards[1]!.find('h3')[0]!;
+
+  assert.match(cards[1]!.textContent, /@alice/);
+  assert.equal(heading.textContent, 'GitHub');
+  assert.equal(heading.find('svg').length, 1);
 });

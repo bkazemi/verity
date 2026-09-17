@@ -1,4 +1,10 @@
-import { attestationLabel, statusLabel, type Attestation, type Evidence } from '../core/index.js';
+import {
+  attestationLabel,
+  externalName,
+  statusLabel,
+  type Attestation,
+  type Evidence,
+} from '../core/index.js';
 import { verificationMark } from './mark.js';
 import { providerMark } from './provider-mark.js';
 
@@ -201,9 +207,13 @@ function render(content: HTMLElement, evidence: Evidence) {
     ...attestationNote(evidence.attestations?.local, names),
   );
 
+  const logo = providerMark(evidence.provider);
+
   const externalCard = accountCard(
-    [providerMark(evidence.provider, provider), document.createTextNode(provider)],
-    `@${evidence.external.handle.replace(/^@/, '')}`,
+    // The mark and the name, or just the name. A mark that falls back to writing the name
+    // would print it twice here, since this heading writes it either way.
+    logo ? [logo, document.createTextNode(provider)] : [document.createTextNode(provider)],
+    externalName(evidence.external),
     evidence.external.id,
     evidence.external.profileUrl,
     // Status first, then how it was shown, then when. The proof explains the state

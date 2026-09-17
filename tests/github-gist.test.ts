@@ -29,7 +29,7 @@ test('a public gist containing the line identifies the account that published it
 
   assert.deepEqual(
     await instance.verify({
-      artifactUrl: 'https://gist.github.com/alice/0123456789abcdef01234567',
+      artifact: 'https://gist.github.com/alice/0123456789abcdef01234567',
       expect,
     }),
     { id: '42', handle: 'alice', profileUrl: 'https://github.com/alice' },
@@ -52,7 +52,11 @@ test('the holder cannot point the check at anything but a gist', async () => {
   ]) {
     const { instance, calls } = provider(valid);
 
-    await assert.rejects(instance.verify({ artifactUrl, expect }), `accepted ${artifactUrl}`);
+    await assert.rejects(
+      instance.verify({ artifact: artifactUrl, expect }),
+      `accepted ${artifactUrl}`,
+    );
+
     assert.deepEqual(calls, [], `fetched ${artifactUrl}`);
   }
 });
@@ -75,13 +79,13 @@ test('a gist that does not prove the claim is refused', async () => {
   for (const [name, gist] of cases) {
     const { instance } = provider(gist);
 
-    await assert.rejects(instance.verify({ artifactUrl: url, expect }), `accepted ${name}`);
+    await assert.rejects(instance.verify({ artifact: url, expect }), `accepted ${name}`);
   }
 
   // A deleted or rate-limited gist is a failure, never a pass.
   const { instance } = provider({ message: 'Not Found' }, false);
 
-  await assert.rejects(instance.verify({ artifactUrl: url, expect }));
+  await assert.rejects(instance.verify({ artifact: url, expect }));
 });
 
 test('a gist proving one flow does not prove another', async () => {
@@ -89,7 +93,7 @@ test('a gist proving one flow does not prove another', async () => {
 
   await assert.rejects(
     instance.verify({
-      artifactUrl: 'https://gist.github.com/alice/0123456789abcdef01234567',
+      artifact: 'https://gist.github.com/alice/0123456789abcdef01234567',
       expect: 'Verity proof for site.test: a different token',
     }),
   );

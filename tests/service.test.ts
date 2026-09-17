@@ -3,12 +3,16 @@ import assert from 'node:assert/strict';
 import { VerityService, type ServiceOptions } from '../src/server/service.js';
 
 /** Either shape of provider drives the same service, so the fixture takes both. */
-type FakeProvider = ReturnType<typeof fakeProvider> | ReturnType<typeof fakeArtifactProvider>;
+type FakeProvider =
+  | ReturnType<typeof fakeProvider>
+  | ReturnType<typeof fakeArtifactProvider>
+  | ReturnType<typeof fakeDocumentProvider>;
 
 import {
   alice,
   bob,
   fakeArtifactProvider,
+  fakeDocumentProvider,
   fakeProvider,
   MemoryStorage,
   projectPage,
@@ -652,4 +656,113 @@ test('each run spends a bounded number of requests, oldest proof first', async (
 test('freshness must outlast the schedule meant to keep it', () => {
   assert.throws(() => fixture(fakeArtifactProvider(), { recheckMs: 5000, freshnessMs: 5000 }));
   assert.doesNotThrow(() => fixture(fakeArtifactProvider(), { freshnessMs: Infinity }));
+});
+
+/** A connection whose proof this backend holds, so there is nothing to go missing. */
+async function held(extra: Partial<ServiceOptions> = {}) {
+  const provider = fakeDocumentProvider();
+
+  const f = fixture(provider, {
+    validityMs: 1000000,
+    recheckMs: 1000,
+    freshnessMs: 5000,
+    recheckTimeoutMs: 50,
+    ...extra,
+  });
+
+  const flow = await f.service.start(alice);
+
+  await f.service.submit(flow.flowId, flow.binding, `signed: ${flow.expect}`);
+
+  const id = (await f.service.approve(flow.flowId, flow.binding, alice, 'public'))!;
+
+  return { ...f, provider, id };
+}
+
+test('a proof handed over is published here and addressed by the connection it proves', async () => {
+  const f = await held();
+  const evidence = await f.service.read(f.id);
+
+  assert.deepEqual(evidence.attestations!.external, {
+    by: 'provider',
+    method: 'signature',
+    artifactUrl: `https://site.test/api/verity/connections/${f.id}/proof`,
+    expect: evidence.attestations!.external.expect,
+    hosted: true,
+    confirmedAt: 1000000,
+  });
+
+  // The proof itself is readable, which is the whole point of holding it.
+  assert.match(await f.service.proof(f.id), /^signed: Verity proof for Site: /);
+
+  // An unlisted record's proof is the holder's to hand out, exactly like its evidence.
+  const unlisted = await held();
+  const secret = await unlisted.service.start(alice);
+
+  await unlisted.service.submit(secret.flowId, secret.binding, `signed: ${secret.expect}`);
+
+  const id = (await unlisted.service.approve(secret.flowId, secret.binding, alice, 'unlisted'))!;
+
+  await assert.rejects(unlisted.service.proof(id));
+  assert.match(await unlisted.service.proof(id, alice), /^signed: /);
+});
+
+test('a proof this backend holds never goes stale, however long nobody asks', async () => {
+  const f = await held();
+
+  // Far past any freshness bound: a document that cannot go missing cannot go unread.
+  f.advance(500000);
+  assert.equal((await f.service.read(f.id)).status, 'verified');
+  assert.equal((await f.service.published()).length, 1);
+});
+
+test('a withdrawn identity revokes the connection rather than ageing it out', async () => {
+  const f = await held();
+
+  f.advance(1000);
+  assert.equal(await f.service.recheck(), 1);
+  assert.equal(f.provider.calls, 1);
+  assert.equal((await f.service.read(f.id)).status, 'verified');
+
+  // An unreachable keyserver says nothing, so nothing is written and nothing changes.
+  f.provider.fail = true;
+  f.advance(1000);
+  assert.equal(await f.service.recheck(), 0);
+  assert.equal((await f.service.read(f.id)).status, 'verified');
+
+  // The holder withdrawing the identity is a choice, so the connection is revoked and
+  // stays revoked: unlike staleness, this does not reverse on the next run.
+  f.provider.fail = false;
+  f.provider.gone = true;
+  f.advance(1000);
+  assert.equal(await f.service.recheck(), 0);
+
+  const evidence = await f.service.read(f.id);
+
+  assert.equal(evidence.status, 'revoked');
+  assert.equal(evidence.revokedAt, 1003000);
+  assert.deepEqual(await f.service.published(), []);
+
+  // Already revoked, so there is nothing left to ask about.
+  const before = f.provider.calls;
+
+  f.advance(1000);
+  assert.equal(await f.service.recheck(), 0);
+  assert.equal(f.provider.calls, before);
+});
+
+test('a method with nowhere to ask about withdrawal does not pretend to look', async () => {
+  const provider = fakeDocumentProvider();
+
+  delete (provider as { withdrawn?: unknown }).withdrawn;
+
+  const f = fixture(provider, { validityMs: 1000000, recheckMs: 1000, freshnessMs: 5000 });
+  const flow = await f.service.start(alice);
+
+  await f.service.submit(flow.flowId, flow.binding, `signed: ${flow.expect}`);
+  await f.service.approve(flow.flowId, flow.binding, alice, 'public');
+  f.advance(500000);
+
+  assert.equal(await f.service.recheck(), 0);
+  assert.equal((await f.service.published()).length, 1);
 });

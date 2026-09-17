@@ -16,6 +16,8 @@ export { githubProvider } from './github.js';
 
 export { githubGistProvider } from './github-gist.js';
 
+export { pgpProvider } from './pgp.js';
+
 export type { ServiceOptions } from './service.js';
 
 export interface ServerOptions extends ServiceOptions {
@@ -23,6 +25,13 @@ export interface ServerOptions extends ServiceOptions {
   authenticate(request: Request): Promise<LocalAccount | undefined>;
   reportUrl: string;
 }
+
+/**
+ * The largest request body any route accepts. A form field is a few hundred bytes, but a
+ * pasted OpenPGP key carries every certification it has ever collected and a long-lived
+ * one runs to tens of kilobytes. Still small enough that the size itself costs nothing.
+ */
+const maxBodyBytes = 65536;
 
 const escape = (value: unknown) =>
   String(value).replace(
@@ -51,6 +60,20 @@ const html = (body: string, status = 200) =>
 const json = (data: unknown) =>
   new Response(JSON.stringify(data), {
     headers: { ...headers, 'Content-Type': 'application/json' },
+  });
+
+/**
+ * A proof this backend publishes, served as the text it is so a reader can put it straight
+ * into their own tools. Never rendered and never interpreted: it is somebody else's bytes.
+ */
+const plain = (body: string) =>
+  new Response(body, {
+    headers: {
+      ...headers,
+      'Content-Type': 'text/plain; charset=utf-8',
+      'Content-Disposition': 'inline',
+      'Access-Control-Allow-Origin': '*',
+    },
   });
 
 const redirect = (url: string, cookie?: string) =>
@@ -156,7 +179,7 @@ export function createVerity(options: ServerOptions) {
   async function body(request: Request): Promise<Record<string, string>> {
     const text = await request.text();
 
-    if (text.length > 8192) throw new Unavailable();
+    if (text.length > maxBodyBytes) throw new Unavailable();
 
     if (request.headers.get('content-type')?.startsWith('application/json')) {
       const value: unknown = JSON.parse(text);
@@ -287,10 +310,14 @@ export function createVerity(options: ServerOptions) {
             return html(
               page(
                 `Verify with ${options.provider.name}`,
-                `<p>${escape(options.provider.instructions(flow.expect))}</p>
+                `<p style="white-space:pre-wrap">${escape(options.provider.instructions(flow.expect))}</p>
             <p><output>${escape(flow.expect)}</output></p>
             <form method="post" action="${escape(prefix)}/flows/${escape(flow.id)}/submit">
-            <label>Address of your published proof <input name="artifactUrl" type="url" required></label>
+            ${
+              options.provider.artifact === 'document'
+                ? '<label>Your proof <textarea name="artifact" rows="14" cols="72" required></textarea></label>'
+                : '<label>Address of your published proof <input name="artifact" type="url" required></label>'
+            }
             <button>Check my proof</button></form>
             <p>Anyone can read this line and the account that published it. Do not publish anything else alongside it.</p>`,
               ),
@@ -342,6 +369,11 @@ export function createVerity(options: ServerOptions) {
             ? json(evidence)
             : html(evidencePage(evidence, prefix, options.reportUrl));
         }
+
+        const hosted = path.match(/^\/connections\/([^/]+)\/proof$/);
+
+        // As public as the evidence it belongs to, and checked the same way.
+        if (hosted) return plain(await service.proof(hosted[1]!));
 
         if (path.startsWith('/connections/')) {
           const id = path.slice(13);
@@ -395,9 +427,9 @@ export function createVerity(options: ServerOptions) {
         const submission = path.match(/^\/flows\/([^/]+)\/submit$/);
 
         if (submission) {
-          if (!data.artifactUrl) throw new Unavailable();
+          if (!data.artifact) throw new Unavailable();
 
-          await service.submit(submission[1]!, binding(request), data.artifactUrl);
+          await service.submit(submission[1]!, binding(request), data.artifact);
 
           return redirect(`${prefix}/flows/${submission[1]!}`);
         }
@@ -473,7 +505,7 @@ export function nodeHandler(handler: (request: Request) => Promise<Response>, or
       for await (const chunk of req) {
         length += chunk.length;
 
-        if (length > 8192) {
+        if (length > maxBodyBytes) {
           res.writeHead(413);
           res.end();
 
