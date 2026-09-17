@@ -25,7 +25,7 @@ const server = createServer((request, response) => {
   if (url.pathname.startsWith('/api/verity/connections/')) {
     const id = url.pathname.split('/').at(-1)!;
 
-    if (!['current', 'expired', 'revoked'].includes(id)) {
+    if (!['current', 'signed-in', 'expired', 'revoked'].includes(id)) {
       response.writeHead(404);
       response.end('Unavailable');
 
@@ -41,7 +41,7 @@ const server = createServer((request, response) => {
       siteName: 'JoeSite',
       verifierName: 'JoeSite',
       visibility: 'public',
-      status: id === 'current' ? 'verified' : (id as 'expired' | 'revoked'),
+      status: ['current', 'signed-in'].includes(id) ? 'verified' : (id as 'expired' | 'revoked'),
       authenticatedAt: Date.now() - 86400000,
       approvedAt: Date.now() - 86400000,
       visibilityApprovedAt: Date.now() - 86400000,
@@ -50,14 +50,15 @@ const server = createServer((request, response) => {
       attestations: {
         // The site is the only authority on its own namespace, so it states this side.
         local: { by: 'backend', method: 'declared', confirmedAt: Date.now() - 86400000 },
-        // Two methods, so the preview shows both a published proof and a plain sign-in.
+        // The same pair proved two ways, so the preview shows both: a gist anyone can
+        // open and check, and a sign-in that publishes nothing.
         external:
           id === 'current'
             ? {
                 by: 'provider',
                 method: 'attestation',
-                artifactUrl: `${origin}/demo`,
-                expect: 'verity-demo-token',
+                artifactUrl: 'https://gist.github.com/joe/3f8a1c9e2b7d4506a1f2',
+                expect: 'Verity proof for JoeSite: 9Qv2bXkP',
                 confirmedAt: Date.now() - 3600000,
               }
             : { by: 'provider', method: 'oauth', confirmedAt: Date.now() - 86400000 },

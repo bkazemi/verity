@@ -46,7 +46,7 @@ test(
         flow = await service.start(alice);
 
       await service.callback(
-        new URL(flow.authorizationUrl).searchParams.get('state')!,
+        new URL(flow.authorizationUrl!).searchParams.get('state')!,
         flow.binding,
         'code',
       );

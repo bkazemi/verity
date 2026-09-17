@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import {
   attestationLabel,
+  isArtifactProvider,
   type Attestation,
   type Evidence,
   type Flow,
@@ -11,6 +12,8 @@ import { VerityService, Unavailable, type ServiceOptions } from './service.js';
 export { VerityService, Unavailable } from './service.js';
 
 export { githubProvider } from './github.js';
+
+export { githubGistProvider } from './github-gist.js';
 
 export type { ServiceOptions } from './service.js';
 
@@ -180,6 +183,13 @@ export function createVerity(options: ServerOptions) {
     );
   }
 
+  /**
+   * A redirect provider sends the holder to its own site. An artifact provider keeps them
+   * here, where the flow page tells them what to publish and takes the address back.
+   */
+  const entry = (flow: { flowId: string; authorizationUrl?: string }) =>
+    flow.authorizationUrl ?? `${prefix}/flows/${flow.flowId}`;
+
   async function handle(request: Request): Promise<Response> {
     const url = new URL(request.url);
 
@@ -261,11 +271,30 @@ export function createVerity(options: ServerOptions) {
           const flow = await service.start(await local(request), undefined, 'connect');
           const cookie = `${cookieName}=${flow.binding}; HttpOnly; SameSite=Lax; Path=${prefix || '/'}; Max-Age=${Math.ceil((options.flowTtlMs ?? 600000) / 1000)}${base.protocol === 'https:' ? '; Secure' : ''}`;
 
-          return redirect(flow.authorizationUrl, cookie);
+          return redirect(entry(flow), cookie);
         }
 
         if (path.startsWith('/flows/')) {
           const flow = await service.flow(path.slice(7), binding(request));
+
+          // Holder-paced: nothing has been proved yet, so the page says what to publish
+          // and waits. The line is public by design, which is what makes it checkable.
+          if (flow.phase === 'pending' && flow.expect && isArtifactProvider(options.provider)) {
+            if (!['revoke', 'share-revoke'].includes(flow.kind))
+              if ((await local(request)).id !== flow.local?.id) throw new Unavailable();
+
+            return html(
+              page(
+                `Verify with ${options.provider.name}`,
+                `<p>${escape(options.provider.instructions(flow.expect))}</p>
+            <p><output>${escape(flow.expect)}</output></p>
+            <form method="post" action="${escape(prefix)}/flows/${escape(flow.id)}/submit">
+            <label>Address of your published proof <input name="artifactUrl" type="url" required></label>
+            <button>Check my proof</button></form>
+            <p>Anyone can read this line and the account that published it. Do not publish anything else alongside it.</p>`,
+              ),
+            );
+          }
 
           if (flow.phase !== 'approval') return result(flow.phase, flow.resultId);
 
@@ -359,7 +388,17 @@ export function createVerity(options: ServerOptions) {
 
           const cookie = `${cookieName}=${flow.binding}; HttpOnly; SameSite=Lax; Path=${prefix || '/'}; Max-Age=${Math.ceil((options.flowTtlMs ?? 600000) / 1000)}${base.protocol === 'https:' ? '; Secure' : ''}`;
 
-          return redirect(flow.authorizationUrl, cookie);
+          return redirect(entry(flow), cookie);
+        }
+
+        const submission = path.match(/^\/flows\/([^/]+)\/submit$/);
+
+        if (submission) {
+          if (!data.artifactUrl) throw new Unavailable();
+
+          await service.submit(submission[1]!, binding(request), data.artifactUrl);
+
+          return redirect(`${prefix}/flows/${submission[1]!}`);
         }
 
         const approval = path.match(/^\/flows\/([^/]+)\/approve$/);

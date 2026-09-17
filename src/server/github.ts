@@ -1,11 +1,11 @@
-import type { Provider } from '../core/index.js';
+import type { RedirectProvider } from '../core/index.js';
 
 /** GitHub.com OAuth app, PKCE S256, no additional scopes. Tokens are never persisted. */
 export function githubProvider(options: {
   clientId: string;
   clientSecret: string;
   fetch?: typeof fetch;
-}): Provider {
+}): RedirectProvider {
   if (!options.clientId || !options.clientSecret) throw new Error('GitHub credentials required');
 
   const request = options.fetch ?? fetch;

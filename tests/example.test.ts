@@ -50,7 +50,7 @@ test(
     const flow = await service.start(local);
 
     await service.callback(
-      new URL(flow.authorizationUrl).searchParams.get('state')!,
+      new URL(flow.authorizationUrl!).searchParams.get('state')!,
       flow.binding,
       'fixture-only',
     );

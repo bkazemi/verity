@@ -1,4 +1,10 @@
-import type { Records, Storage, Transaction, Provider } from '../src/core/index.js';
+import type {
+  Records,
+  Storage,
+  Transaction,
+  RedirectProvider,
+  ArtifactProvider,
+} from '../src/core/index.js';
 
 export class MemoryStorage implements Storage {
   rows = new Map<string, unknown>();
@@ -54,7 +60,7 @@ export const projectPage = {
   profileUrl: 'https://site.test/projects/verity',
 };
 
-export function fakeProvider(): Provider & { calls: number; externalId: string } {
+export function fakeProvider(): RedirectProvider & { calls: number; externalId: string } {
   return {
     id: 'github',
     name: 'GitHub',
@@ -71,6 +77,38 @@ export function fakeProvider(): Provider & { calls: number; externalId: string }
         handle: 'known-alice',
         profileUrl: 'https://github.com/known-alice',
       };
+    },
+  };
+}
+
+/** Holder-paced counterpart to fakeProvider: nothing is fetched, the artifact is a map. */
+export function fakeArtifactProvider(): ArtifactProvider & {
+  artifacts: Map<string, string>;
+  externalId: string;
+  calls: number;
+} {
+  const artifacts = new Map<string, string>();
+
+  return {
+    id: 'notes',
+    name: 'Notes',
+    method: 'attestation',
+    artifacts,
+    externalId: '42',
+    calls: 0,
+    instructions: (expect) => `Publish this line: ${expect}`,
+    verify({ artifactUrl, expect }) {
+      this.calls += 1;
+
+      if (new URL(artifactUrl).host !== 'notes.test') throw new Error('Not a notes address');
+
+      if (artifacts.get(artifactUrl) !== expect) throw new Error('Line not found');
+
+      return Promise.resolve({
+        id: this.externalId,
+        handle: 'alice',
+        profileUrl: 'https://notes.test/alice',
+      });
     },
   };
 }

@@ -1,12 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createVerity } from '../src/server/index.js';
-import { alice, bob, fakeProvider, MemoryStorage } from './helpers.js';
+import { alice, bob, fakeArtifactProvider, fakeProvider, MemoryStorage } from './helpers.js';
 
-function fixture() {
+function fixture(provider = fakeProvider() as Parameters<typeof createVerity>[0]['provider']) {
   const app = createVerity({
     storage: new MemoryStorage(),
-    provider: fakeProvider(),
+    provider,
     baseUrl: 'https://site.test/api/verity',
     siteName: 'Site',
     verifierName: 'Self-hosted Site',
@@ -235,4 +235,71 @@ test('the evidence page names how each side was established, without ranking the
   assert.match(hostile, /Published a proof on GitHub/);
   assert.ok(!hostile.includes('javascript:'));
   assert.ok(!hostile.includes('View the proof'));
+});
+
+test('a holder-paced proof is published here, submitted here, and approved here', async () => {
+  const provider = fakeArtifactProvider();
+  const f = fixture(provider);
+
+  // No redirect away: the flow stays on this origin while the holder publishes.
+  const start = await f.request('/sessions?kind=connect', { headers: { cookie: 'local=alice' } });
+
+  assert.equal(start.status, 303);
+  const location = start.headers.get('location')!;
+
+  assert.match(location, /^\/api\/verity\/flows\//);
+  const cookie = start.headers.get('set-cookie')!.split(';')[0]!;
+  const path = location.replace('/api/verity', '');
+
+  const waiting = await f.request(path, { headers: { cookie: `${cookie}; local=alice` } });
+  const body = await waiting.text();
+
+  assert.match(body, /Publish this line/);
+  assert.match(body, /Verity proof for Site: /);
+  assert.match(body, /name="artifactUrl"/);
+
+  // Another local account cannot watch someone else's flow.
+  const stranger = await f.request(path, { headers: { cookie: `${cookie}; local=bob` } });
+
+  assert.equal(stranger.status, 404);
+
+  const expect = body.match(/<output>([^<]+)<\/output>/)![1]!;
+  const url = 'https://notes.test/alice/1';
+
+  provider.artifacts.set(url, expect);
+
+  const submitted = await f.request(`${path}/submit`, {
+    method: 'POST',
+    headers: {
+      origin: 'https://site.test',
+      cookie: `${cookie}; local=alice`,
+      'content-type': 'application/x-www-form-urlencoded',
+    },
+    body: `artifactUrl=${encodeURIComponent(url)}`,
+  });
+
+  assert.equal(submitted.status, 303);
+
+  const review = await f.request(path, { headers: { cookie: `${cookie}; local=alice` } });
+
+  assert.match(await review.text(), /value="unlisted" checked/);
+
+  const approved = await f.request(`${path}/approve`, {
+    method: 'POST',
+    headers: { origin: 'https://site.test', cookie: `${cookie}; local=alice` },
+    body: 'visibility=public&action=approve',
+  });
+
+  assert.equal(approved.status, 200);
+  const evidence = (await f.app.service.mine(alice))[0]!;
+
+  assert.equal(evidence.attestations!.external.artifactUrl, url);
+  assert.equal(evidence.attestations!.external.method, 'attestation');
+
+  // The published proof is offered to the reader on the evidence page.
+  const page = await (await f.request(`/connections/${evidence.id}`)).text();
+
+  assert.match(page, /Published a proof on Notes/);
+  assert.match(page, /View the proof/);
+  assert.ok(page.includes(url));
 });

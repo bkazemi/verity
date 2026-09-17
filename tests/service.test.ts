@@ -1,13 +1,23 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { VerityService } from '../src/server/service.js';
-import { alice, bob, fakeProvider, MemoryStorage, projectPage } from './helpers.js';
 
-function fixture() {
+/** Either shape of provider drives the same service, so the fixture takes both. */
+type FakeProvider = ReturnType<typeof fakeProvider> | ReturnType<typeof fakeArtifactProvider>;
+
+import {
+  alice,
+  bob,
+  fakeArtifactProvider,
+  fakeProvider,
+  MemoryStorage,
+  projectPage,
+} from './helpers.js';
+
+function fixture(provider: FakeProvider = fakeProvider()) {
   let now = 1000000;
 
-  const storage = new MemoryStorage(),
-    provider = fakeProvider();
+  const storage = new MemoryStorage();
 
   const service = new VerityService({
     storage,
@@ -23,7 +33,7 @@ function fixture() {
 
   async function pending(local = alice) {
     const flow = await service.start(local);
-    const state = new URL(flow.authorizationUrl).searchParams.get('state')!;
+    const state = new URL(flow.authorizationUrl!).searchParams.get('state')!;
 
     await service.callback(state, flow.binding, 'code');
 
@@ -88,7 +98,7 @@ test('the local side of a link can be a page or the site itself, not only an acc
 test('callback binding, replay, racing callbacks, expiration, and cancellation', async () => {
   const f = fixture(),
     flow = await f.service.start(alice),
-    state = new URL(flow.authorizationUrl).searchParams.get('state')!;
+    state = new URL(flow.authorizationUrl!).searchParams.get('state')!;
 
   await assert.rejects(f.service.callback(state, 'stolen-browser', 'code'));
   await assert.rejects(f.service.callback('substituted-state', flow.binding, 'code'));
@@ -165,7 +175,7 @@ test('external revocation requires fresh authentication by the same stable provi
   f.provider.externalId = '99';
 
   await f.service.callback(
-    new URL(wrong.authorizationUrl).searchParams.get('state')!,
+    new URL(wrong.authorizationUrl!).searchParams.get('state')!,
     wrong.binding,
     'code',
   );
@@ -176,7 +186,7 @@ test('external revocation requires fresh authentication by the same stable provi
   const right = await f.service.start(undefined, id, 'revoke');
 
   await f.service.callback(
-    new URL(right.authorizationUrl).searchParams.get('state')!,
+    new URL(right.authorizationUrl!).searchParams.get('state')!,
     right.binding,
     'code',
   );
@@ -198,7 +208,7 @@ test('visibility changes require owner and external reauthentication, invalidate
   await assert.rejects(f.service.approve(flow.flowId, flow.binding, alice, 'public'));
 
   await f.service.callback(
-    new URL(flow.authorizationUrl).searchParams.get('state')!,
+    new URL(flow.authorizationUrl!).searchParams.get('state')!,
     flow.binding,
     'code',
   );
@@ -212,15 +222,20 @@ test('visibility changes require owner and external reauthentication, invalidate
 });
 
 test('provider denial/failure and profile substitution create no connection', async () => {
-  const f = fixture();
+  const provider = fakeProvider(),
+    f = fixture(provider);
 
   await assert.rejects(f.service.start({ ...alice, profileUrl: 'https://evil.test/1' }));
   const flow = await f.service.start(alice);
 
-  await f.service.callback(new URL(flow.authorizationUrl).searchParams.get('state')!, flow.binding);
+  await f.service.callback(
+    new URL(flow.authorizationUrl!).searchParams.get('state')!,
+    flow.binding,
+  );
+
   assert.equal((await f.service.flow(flow.flowId, flow.binding)).phase, 'cancelled');
 
-  f.provider.authenticate = async () => {
+  provider.authenticate = async () => {
     throw new Error('secret provider error');
   };
 
@@ -238,7 +253,7 @@ test('external holder can revoke only the sharing link without disconnecting', a
   const flow = await f.service.start(undefined, id, 'share-revoke');
 
   await f.service.callback(
-    new URL(flow.authorizationUrl).searchParams.get('state')!,
+    new URL(flow.authorizationUrl!).searchParams.get('state')!,
     flow.binding,
     'code',
   );
@@ -290,7 +305,7 @@ test('renewal extends the same record, so published embeds and evidence urls sur
   await assert.rejects(f.service.approve(flow.flowId, flow.binding, alice, 'public'));
 
   await f.service.callback(
-    new URL(flow.authorizationUrl).searchParams.get('state')!,
+    new URL(flow.authorizationUrl!).searchParams.get('state')!,
     flow.binding,
     'code',
   );
@@ -363,7 +378,7 @@ test('each side records how it was attested, and only re-establishing a side rec
   const visibility = await f.service.start(alice, id, 'visibility');
 
   await f.service.callback(
-    new URL(visibility.authorizationUrl).searchParams.get('state')!,
+    new URL(visibility.authorizationUrl!).searchParams.get('state')!,
     visibility.binding,
     'code',
   );
@@ -376,7 +391,7 @@ test('each side records how it was attested, and only re-establishing a side rec
   const renew = await f.service.start(alice, id, 'renew');
 
   await f.service.callback(
-    new URL(renew.authorizationUrl).searchParams.get('state')!,
+    new URL(renew.authorizationUrl!).searchParams.get('state')!,
     renew.binding,
     'code',
   );
@@ -390,13 +405,9 @@ test('each side records how it was attested, and only re-establishing a side rec
 
 test('a provider naming its own method has it recorded, and older records infer theirs', async () => {
   const f = fixture();
-
-  // One provider can be proved more than one way, so the method travels with the
-  // implementation rather than being fixed by the provider id.
-  f.provider.method = 'attestation';
   const { id } = await f.connect('public');
 
-  assert.equal((await f.service.read(id)).attestations!.external.method, 'attestation');
+  assert.equal((await f.service.read(id)).attestations!.external.method, 'oauth');
   assert.equal((await f.service.read(id)).provider, f.provider.id);
 
   // Records stored before methods were kept still have a knowable method: the site
@@ -412,4 +423,81 @@ test('a provider naming its own method has it recorded, and older records infer 
 
   assert.deepEqual(inferred.local, { by: 'backend', method: 'declared', confirmedAt: 1000000 });
   assert.deepEqual(inferred.external, { by: 'provider', method: 'oauth', confirmedAt: 1000000 });
+});
+
+test('a holder-paced proof is published, read back, and kept open for the reader', async () => {
+  const provider = fakeArtifactProvider();
+  const f = fixture(provider);
+
+  const flow = await f.service.start(alice);
+
+  // Nothing to redirect to: the holder publishes first, at their own pace.
+  assert.equal(flow.authorizationUrl, undefined);
+  assert.match(flow.expect!, /^Verity proof for Site: /);
+  assert.match(flow.instructions!, /Publish this line/);
+
+  // Naming the site in the line means the holder sees what they are agreeing to.
+  assert.ok(flow.instructions!.includes(flow.expect!));
+
+  // A second flow cannot be completed with the first flow's artifact.
+  const other = await f.service.start(alice);
+
+  assert.notEqual(other.expect, flow.expect);
+
+  const url = 'https://notes.test/alice/1';
+
+  provider.artifacts.set(url, other.expect!);
+  await f.service.submit(flow.flowId, flow.binding, url);
+  assert.equal((await f.service.flow(flow.flowId, flow.binding)).phase, 'failed');
+
+  // A failed check is dead rather than retryable in place.
+  provider.artifacts.set(url, flow.expect!);
+  await assert.rejects(f.service.submit(flow.flowId, flow.binding, url));
+
+  const good = await f.service.start(alice);
+
+  provider.artifacts.set(url, good.expect!);
+  await f.service.submit(good.flowId, good.binding, url);
+  assert.equal((await f.service.flow(good.flowId, good.binding)).phase, 'approval');
+
+  const id = (await f.service.approve(good.flowId, good.binding, alice, 'public'))!;
+  const evidence = await f.service.read(id);
+
+  // The proof stays open: where it is, what should be there, and when it was read.
+  assert.deepEqual(evidence.attestations!.external, {
+    by: 'provider',
+    method: 'attestation',
+    artifactUrl: url,
+    expect: good.expect,
+    confirmedAt: 1000000,
+  });
+
+  // The local side is still the site's own statement, whatever the other side used.
+  assert.equal(evidence.attestations!.local.method, 'declared');
+});
+
+test('an artifact flow refuses a location the provider will not accept', async () => {
+  const provider = fakeArtifactProvider();
+  const f = fixture(provider);
+
+  const flow = await f.service.start(alice);
+
+  provider.artifacts.set('https://evil.test/alice', flow.expect!);
+  await f.service.submit(flow.flowId, flow.binding, 'https://evil.test/alice');
+
+  assert.equal((await f.service.flow(flow.flowId, flow.binding)).phase, 'failed');
+  assert.deepEqual(await f.service.mine(alice), []);
+});
+
+test('a redirect provider has no submit path and an artifact provider no callback', async () => {
+  const redirect = fixture();
+  const flow = await redirect.service.start(alice);
+
+  await assert.rejects(redirect.service.submit(flow.flowId, flow.binding, 'https://notes.test/a'));
+
+  const provider = fakeArtifactProvider();
+  const artifact = fixture(provider);
+  const started = await artifact.service.start(alice);
+
+  assert.equal(started.authorizationUrl, undefined);
 });

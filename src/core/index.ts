@@ -90,6 +90,13 @@ export interface Flow {
   external?: ExternalAccount;
   authenticatedAt?: number;
   resultId?: string;
+  /**
+   * The string an artifact must contain. Public by design: the holder publishes it. It is
+   * unguessable and per-flow, so an artifact made for one flow cannot complete another.
+   */
+  expect?: string;
+  /** Where the holder published it, kept so the proof stays open to the reader. */
+  artifactUrl?: string;
 }
 
 export interface Share {
@@ -129,21 +136,47 @@ export interface Storage {
   transaction<T>(work: (tx: Transaction) => Promise<T>): Promise<T>;
 }
 
-export interface Provider {
+/**
+ * Proves control by sending the holder to the provider and back in one round trip. The
+ * provider is the only party that sees the holder's credentials, and nothing is published.
+ */
+export interface RedirectProvider {
   id: string;
   name: string;
-  /**
-   * How this implementation demonstrates control. Absent means `oauth`, the redirect and
-   * code exchange the interface below describes. A second implementation may carry the
-   * same id with a different method: one provider, more than one way to prove it.
-   */
-  method?: Method;
+  /** Absent means oauth, the shape this interface describes. */
+  method?: 'oauth';
   authorizationUrl(input: { state: string; challenge: string; redirectUri: string }): string;
   authenticate(input: {
     code: string;
     verifier: string;
     redirectUri: string;
   }): Promise<ExternalAccount>;
+}
+
+/**
+ * Proves control by having the holder publish a given string somewhere only they can write,
+ * then reading it back. It is holder-paced rather than one round trip, it needs no
+ * registration with the provider, and it leaves a proof a reader can check for themselves.
+ */
+export interface ArtifactProvider {
+  id: string;
+  name: string;
+  method: Exclude<Method, 'declared' | 'oauth'>;
+  /** Told to the holder verbatim. Must name what they are publishing and where. */
+  instructions(expect: string): string;
+  /**
+   * Reads the artifact the holder points at and returns whose it is. Must confirm the
+   * artifact contains `expect` and is publicly readable, and must refuse any location
+   * outside the provider, since the holder chooses this url.
+   */
+  verify(input: { artifactUrl: string; expect: string }): Promise<ExternalAccount>;
+}
+
+export type Provider = RedirectProvider | ArtifactProvider;
+
+/** Only an artifact provider is holder-paced, and only it needs a url handed back. */
+export function isArtifactProvider(provider: Provider): provider is ArtifactProvider {
+  return 'verify' in provider;
 }
 
 export interface Evidence {

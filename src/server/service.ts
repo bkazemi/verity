@@ -1,12 +1,17 @@
 import { createHash, randomBytes } from 'node:crypto';
 import {
+  isArtifactProvider,
   status,
+  type ArtifactProvider,
+  type Attestation,
   type Attestations,
   type Connection,
   type Evidence,
+  type ExternalAccount,
   type Flow,
   type LocalAccount,
   type Provider,
+  type RedirectProvider,
   type Storage,
   type Transaction,
   type Visibility,
@@ -109,6 +114,13 @@ export class VerityService {
       expiresAt: this.now() + (this.options.flowTtlMs ?? 600000),
     };
 
+    const artifact = isArtifactProvider(this.options.provider) ? this.options.provider : undefined;
+
+    // Unguessable and per-flow, so an artifact published for one flow cannot complete
+    // another, and naming the site means the holder can see what they are agreeing to
+    // before they publish anything.
+    if (artifact) flow.expect = `Verity proof for ${this.options.siteName}: ${secret()}`;
+
     await this.options.storage.transaction(async (tx) => {
       if (kind !== 'connect') {
         const connection = await tx.get('connections', connectionId!);
@@ -125,15 +137,56 @@ export class VerityService {
       await tx.put('flows', flow.id, flow);
     });
 
-    return {
-      flowId: flow.id,
-      binding,
-      authorizationUrl: this.options.provider.authorizationUrl({
-        state,
-        challenge: hash(verifier),
-        redirectUri: `${this.baseUrl}/callback`,
-      }),
-    };
+    // A redirect provider hands the holder to its own site; an artifact provider tells
+    // them what to publish and waits for them to say where they put it.
+    return artifact
+      ? {
+          flowId: flow.id,
+          binding,
+          expect: flow.expect!,
+          instructions: artifact.instructions(flow.expect!),
+        }
+      : {
+          flowId: flow.id,
+          binding,
+          authorizationUrl: (this.options.provider as RedirectProvider).authorizationUrl({
+            state,
+            challenge: hash(verifier),
+            redirectUri: `${this.baseUrl}/callback`,
+          }),
+        };
+  }
+
+  /**
+   * Accepts the location the holder says they published the flow's string at, reads it, and
+   * records whose account published it. The url is holder-supplied, so the provider is
+   * responsible for refusing anything outside itself.
+   */
+  async submit(id: string, binding: string, artifactUrl: string): Promise<string> {
+    const provider = this.options.provider;
+
+    if (!isArtifactProvider(provider)) throw new Unavailable();
+
+    const expect = await this.options.storage.transaction(async (tx) => {
+      const flow = await this.bound(tx, id, binding);
+
+      if (flow.phase !== 'pending' || !flow.expect) throw new Unavailable();
+
+      flow.phase = 'exchanging';
+      await tx.put('flows', id, flow);
+
+      return flow.expect;
+    });
+
+    try {
+      const external = await provider.verify({ artifactUrl, expect });
+
+      await this.established(id, binding, external, artifactUrl);
+    } catch {
+      await this.failed(id);
+    }
+
+    return id;
   }
 
   private async bound(tx: Transaction, id: string, binding: string): Promise<Flow> {
@@ -169,58 +222,78 @@ export class VerityService {
     if (!code) return id;
 
     try {
-      const external = await this.options.provider.authenticate({
+      const external = await (this.options.provider as RedirectProvider).authenticate({
         code,
         verifier: claimed.verifier,
         redirectUri: `${this.baseUrl}/callback`,
       });
 
-      if (
-        typeof external.id !== 'string' ||
-        !external.id ||
-        typeof external.handle !== 'string' ||
-        !external.handle ||
-        typeof external.profileUrl !== 'string' ||
-        new URL(external.profileUrl).protocol !== 'https:'
-      )
-        throw new Unavailable();
-
-      await this.options.storage.transaction(async (tx) => {
-        const flow = await this.bound(tx, id, binding);
-
-        if (flow.phase !== 'exchanging') throw new Unavailable();
-
-        if (flow.kind !== 'connect') {
-          const connection = await tx.get('connections', flow.connectionId!);
-
-          if (
-            !connection ||
-            connection.provider !== this.options.provider.id ||
-            connection.external.id !== external.id ||
-            connection.revokedAt !== undefined
-          )
-            throw new Unavailable();
-
-          flow.local = connection.local;
-        }
-
-        flow.external = external;
-        flow.authenticatedAt = this.now();
-        flow.phase = 'approval';
-        await tx.put('flows', id, flow);
-      });
+      await this.established(id, binding, external);
     } catch {
-      await this.options.storage.transaction(async (tx) => {
-        const flow = await tx.get('flows', id);
-
-        if (flow?.phase === 'exchanging') {
-          flow.phase = 'failed';
-          await tx.put('flows', id, flow);
-        }
-      });
+      await this.failed(id);
     }
 
     return id;
+  }
+
+  /**
+   * The identity is established the same way whichever method produced it, so both paths
+   * land here: a provider result is never trusted for its shape, and a flow against an
+   * existing connection must still be the same account on the same provider.
+   */
+  private async established(
+    id: string,
+    binding: string,
+    external: ExternalAccount,
+    artifactUrl?: string,
+  ) {
+    if (
+      typeof external.id !== 'string' ||
+      !external.id ||
+      typeof external.handle !== 'string' ||
+      !external.handle ||
+      typeof external.profileUrl !== 'string' ||
+      new URL(external.profileUrl).protocol !== 'https:'
+    )
+      throw new Unavailable();
+
+    await this.options.storage.transaction(async (tx) => {
+      const flow = await this.bound(tx, id, binding);
+
+      if (flow.phase !== 'exchanging') throw new Unavailable();
+
+      if (flow.kind !== 'connect') {
+        const connection = await tx.get('connections', flow.connectionId!);
+
+        if (
+          !connection ||
+          connection.provider !== this.options.provider.id ||
+          connection.external.id !== external.id ||
+          connection.revokedAt !== undefined
+        )
+          throw new Unavailable();
+
+        flow.local = connection.local;
+      }
+
+      flow.external = external;
+      flow.artifactUrl = artifactUrl;
+      flow.authenticatedAt = this.now();
+      flow.phase = 'approval';
+      await tx.put('flows', id, flow);
+    });
+  }
+
+  /** A failed check leaves the flow dead rather than retryable in place. */
+  private async failed(id: string) {
+    await this.options.storage.transaction(async (tx) => {
+      const flow = await tx.get('flows', id);
+
+      if (flow?.phase === 'exchanging') {
+        flow.phase = 'failed';
+        await tx.put('flows', id, flow);
+      }
+    });
   }
 
   async approve(
@@ -265,7 +338,7 @@ export class VerityService {
           authenticatedAt: flow.authenticatedAt!,
           approvedAt: this.now(),
           expiresAt: this.now() + (this.options.validityMs ?? 30 * 86400000),
-          attestations: this.attestations(flow.authenticatedAt!),
+          attestations: this.attestations(flow),
         };
       } else {
         const existing = await tx.get('connections', flow.connectionId!);
@@ -294,7 +367,7 @@ export class VerityService {
           connection.revocationReason = undefined;
           // Both sides were just re-established: the holder reauthenticated and the site
           // reasserted the subject it displays. A visibility change re-establishes neither.
-          connection.attestations = this.attestations(flow.authenticatedAt!);
+          connection.attestations = this.attestations(flow);
         } else if (flow.kind === 'revoke') {
           connection.revokedAt = this.now();
           connection.revocationReason = 'external';
@@ -356,15 +429,21 @@ export class VerityService {
    * on its own namespace, so it declares the local subject; the provider establishes the
    * external account by whatever method its implementation uses.
    */
-  private attestations(authenticatedAt: number): Attestations {
-    return {
-      local: { by: 'backend', method: 'declared', confirmedAt: this.now() },
-      external: {
-        by: 'provider',
-        method: this.options.provider.method ?? 'oauth',
-        confirmedAt: authenticatedAt,
-      },
+  private attestations(flow: Flow): Attestations {
+    const external: Attestation = {
+      by: 'provider',
+      method: this.options.provider.method ?? 'oauth',
+      confirmedAt: flow.authenticatedAt!,
     };
+
+    // Only a published proof has somewhere for a reader to go, and it is kept with what
+    // they should find there so the same check can be run again later.
+    if (flow.artifactUrl) {
+      external.artifactUrl = flow.artifactUrl;
+      external.expect = flow.expect;
+    }
+
+    return { local: { by: 'backend', method: 'declared', confirmedAt: this.now() }, external };
   }
 
   /** A record from a provider this instance no longer configures keeps its raw id. */
