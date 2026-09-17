@@ -15,8 +15,10 @@ export function githubGistProvider(options: { fetch?: typeof fetch } = {}): Arti
     name: 'GitHub',
     method: 'attestation',
     artifact: 'location',
-    instructions: (expect) =>
-      `Create a public gist at https://gist.github.com containing this line exactly, then paste the gist address below: ${expect}`,
+    instructions: (expect) => [
+      'Publish this line in a public gist at gist.github.com, then paste the gist address below.',
+      { code: expect },
+    ],
     async verify({ artifact, expect }): Promise<ExternalAccount> {
       const url = new URL(artifact);
 

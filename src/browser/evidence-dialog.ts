@@ -1,6 +1,7 @@
 import {
   attestationLabel,
   externalName,
+  localSide,
   statusLabel,
   type Attestation,
   type Evidence,
@@ -73,24 +74,6 @@ function linkMark(): SVGSVGElement {
   }
 
   return svg;
-}
-
-/**
- * The heading and value for the local card. When the site itself is what was linked
- * there is no subject on it to name, so the site is the value and not a label above
- * some other thing. An absent kind means the site did not say, so nothing is assumed.
- */
-function localSide(evidence: Evidence): { heading: string; value: string } {
-  const { kind } = evidence.local;
-
-  if (kind === 'site') return { heading: 'Website', value: evidence.siteName };
-
-  const heading: Record<string, string> = {
-    account: `Account on ${evidence.siteName}`,
-    page: `Page on ${evidence.siteName}`,
-  };
-
-  return { heading: heading[kind ?? ''] ?? evidence.siteName, value: evidence.local.label };
 }
 
 /**
@@ -194,7 +177,7 @@ function render(content: HTMLElement, evidence: Evidence) {
   const names = { site: evidence.siteName, provider };
 
   // Each card says what it is. Without that the pair is two unlabelled boxes.
-  const local = localSide(evidence);
+  const local = localSide(evidence.local, evidence.siteName);
 
   const localCard = accountCard(
     [document.createTextNode(local.heading)],

@@ -1,10 +1,15 @@
 import type {
+  Instruction,
   Records,
   Storage,
   Transaction,
   RedirectProvider,
   ArtifactProvider,
 } from '../src/core/index.js';
+
+/** Instructions reach a page as pieces, so a test that reads them as prose joins them. */
+export const written = (parts: Instruction[]) =>
+  parts.map((part) => (typeof part === 'string' ? part : part.code)).join('\n');
 
 export class MemoryStorage implements Storage {
   rows = new Map<string, unknown>();
@@ -97,7 +102,7 @@ export function fakeArtifactProvider(): ArtifactProvider & {
     artifacts,
     externalId: '42',
     calls: 0,
-    instructions: (expect) => `Publish this line: ${expect}`,
+    instructions: (expect) => ['Publish this line:', { code: expect }],
     verify({ artifact, expect }) {
       this.calls += 1;
 
@@ -134,12 +139,14 @@ export function fakeDocumentProvider(): ArtifactProvider & {
     fail: false,
     externalId: 'FINGERPRINT',
     calls: 0,
-    instructions: (expect) => `Sign this line and paste the result: ${expect}`,
+    instructions: (expect) => ['Sign this line and paste the result:', { code: expect }],
     verify({ artifact, expect }) {
       if (!artifact.includes(expect)) throw new Error('Line not signed');
 
       return Promise.resolve({
         id: this.externalId,
+        // A key, not an account: nobody issued it, so it is never written as a handle.
+        kind: 'key' as const,
         handle: 'AAAA BBBB',
         profileUrl: 'https://keys.test/AAAABBBB',
       });

@@ -181,8 +181,12 @@ export interface ArtifactProvider {
    * because a signature proves itself and where it was typed proves nothing at all.
    */
   artifact: 'location' | 'document';
-  /** Told to the holder verbatim. Must name what they are publishing and where. */
-  instructions(expect: string): string;
+  /**
+   * Told to the holder verbatim. Must name what they are publishing and where. Returned in
+   * pieces so a renderer can set a command as one: a command is copied character for
+   * character, and prose that reflows is prose a holder cannot safely copy.
+   */
+  instructions(expect: string): Instruction[];
   /**
    * Reads what the holder handed back and returns whose it is. Must confirm it contains
    * `expect`. A `location` provider must also refuse any address outside itself, since
@@ -196,6 +200,9 @@ export interface ArtifactProvider {
    */
   withdrawn?(account: ExternalAccount, artifact: string): Promise<boolean>;
 }
+
+/** A piece of what the holder is told: a paragraph, or something they run or publish as is. */
+export type Instruction = string | { code: string };
 
 export type Provider = RedirectProvider | ArtifactProvider;
 
@@ -272,6 +279,26 @@ export function statusLabel(evidence: Pick<Evidence, 'status' | 'expiresAt'>, no
   if (evidence.status === 'verified' && evidence.expiresAt > now) return 'Verified';
 
   return evidence.expiresAt > now ? 'Unconfirmed' : 'Expired';
+}
+
+/**
+ * What to call a link's local side, and what to write as its value. When the site itself is
+ * what was linked there is no subject on it to name, so the site is the value rather than a
+ * label above some other thing. An absent kind means the site did not say, so nothing is
+ * assumed about one.
+ */
+export function localSide(
+  local: Pick<LocalAccount, 'kind' | 'label'>,
+  siteName: string,
+): { heading: string; value: string } {
+  if (local.kind === 'site') return { heading: 'Website', value: siteName };
+
+  const heading: Record<string, string> = {
+    account: `Account on ${siteName}`,
+    page: `Page on ${siteName}`,
+  };
+
+  return { heading: heading[local.kind ?? ''] ?? siteName, value: local.label };
 }
 
 /**

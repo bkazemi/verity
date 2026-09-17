@@ -270,7 +270,7 @@ test('a holder-paced proof is published here, submitted here, and approved here'
 
   assert.equal(stranger.status, 404);
 
-  const expect = body.match(/<output>([^<]+)<\/output>/)![1]!;
+  const expect = body.match(/<code>([^<]+)<\/code>/)![1]!;
   const url = 'https://notes.test/alice/1';
 
   provider.artifacts.set(url, expect);
@@ -328,7 +328,23 @@ test('a proof handed over is taken as text, published here, and served as text',
   assert.match(body, /<textarea/);
   assert.ok(!body.includes('type="url"'));
 
-  const expect = body.match(/<output>([^<]+)<\/output>/)![1]!;
+  // What the holder has to reproduce exactly is set as a block, never as prose.
+  assert.match(body, /<pre><code>/);
+
+  // The copy button is made by that script, so a reader without it sees no dead control.
+  assert.match(body, /\/copy\.js"/);
+  assert.ok(!body.includes('class="copy"'));
+
+  const script = await f.request('/copy.js');
+
+  assert.equal(script.status, 200);
+  assert.equal(script.headers.get('content-type'), 'text/javascript');
+  assert.match(await script.text(), /clipboard/);
+
+  // The sheet's address carries its version, so a release never renders in an old one.
+  assert.match(body, /\/style\.css\?v=[a-z0-9]+"/);
+
+  const expect = body.match(/<code>([^<]+)<\/code>/)![1]!;
   const proof = `-----BEGIN SOMETHING-----\n${expect}\n-----END SOMETHING-----`;
 
   const submitted = await f.request(`${path}/submit`, {
@@ -368,6 +384,11 @@ test('a proof handed over is taken as text, published here, and served as text',
 
   assert.match(page, /Proved with a signature/);
   assert.match(page, /View the proof/);
+
+  // A key is named by what it is. The @ that marks a handle would claim there is an
+  // account behind it, issued by somebody who could also hand it to somebody else.
+  assert.match(page, /AAAA BBBB/);
+  assert.ok(!page.includes('@AAAA'));
 
   // A connection with no proof of its own has nothing to serve under that address.
   const missing = await f.request('/connections/nonexistent/proof');

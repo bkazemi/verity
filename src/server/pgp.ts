@@ -145,8 +145,14 @@ export function pgpProvider(
     name: 'OpenPGP',
     method: 'signature',
     artifact: 'document',
-    instructions: (expect) =>
-      `Sign this line with your OpenPGP key and paste the signed message below, followed by your public key.\n\n  printf '%s\\n' '${expect}' | gpg --clearsign\n  gpg --armor --export YOUR_KEY_ID\n\nPaste both blocks into the box, one after the other.\n\nYour key will be shown by its fingerprint. To be shown by your email address instead, either publish your key at ${keyserver.host} and confirm the address there, or have that address's domain publish your key in its web key directory. An address nobody but your own key stands behind is not shown.`,
+    instructions: (expect) => [
+      'Sign the line with your key:',
+      { code: `printf '%s\\n' '${expect}' | gpg --clearsign` },
+      'Export the key that signed it:',
+      { code: 'gpg --armor --export YOUR_KEY_ID' },
+      'Paste the signed message below, then the key.',
+      `Your key shows as its fingerprint. To show an email address instead, confirm it at ${keyserver.host} or publish your key in that domain's web key directory.`,
+    ],
     async verify({ artifact, expect }): Promise<ExternalAccount> {
       const certificate = readCertificate(artifact);
       const message = readCleartext(artifact);

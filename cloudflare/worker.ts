@@ -1,5 +1,6 @@
 import type { DurableObjectNamespace, DurableObjectState } from '@cloudflare/workers-types';
-import { statusLabel, type Evidence } from '../src/core/index.js';
+import { externalName, localSide, statusLabel, type Evidence } from '../src/core/index.js';
+import { styleVersion } from '../src/server/style.js';
 import { createVerity, githubProvider } from '../src/server/index.js';
 import { CloudflareStorage } from './storage.js';
 import { OwnerAuth } from './auth.js';
@@ -26,7 +27,7 @@ const safeHeaders = {
   'X-Robots-Tag': 'noindex, nofollow',
   'X-Content-Type-Options': 'nosniff',
   'Content-Security-Policy':
-    "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
+    "default-src 'none'; style-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
 };
 
 const escape = (value: string) =>
@@ -37,7 +38,7 @@ const escape = (value: string) =>
 
 const html = (body: string, status = 200) =>
   new Response(
-    `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Verity owner settings</title><body><main><h1>Verity</h1>${body}</main></body></html>`,
+    `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Verity owner settings</title><link rel="stylesheet" href="/api/verity/style.css?v=${styleVersion}"><body><main><h1>Verity</h1>${body}</main></body></html>`,
     { status, headers: { ...safeHeaders, 'Content-Type': 'text/html; charset=utf-8' } },
   );
 
@@ -241,21 +242,29 @@ export class VerityStore {
 
     const connections = await this.app.service.mine(this.local);
 
-    return html(`<h2>${escape(this.local.label)}</h2>
-      <p>Local account: ${escape(this.local.reference)}</p>
+    const local = localSide(this.local, this.env.SITE_NAME);
+
+    return html(`<div class="side"><p class="who">${escape(local.heading)}</p>
+      <p class="name">${escape(local.value)}</p>
+      <p class="reference">${escape(this.local.reference)}</p></div>
       <p><a href="/api/verity/verify">Verify with GitHub or renew a connection</a></p>
-      <p>Approve a public connection to display it on your site. Renew an existing one to extend it in place; only a new pair needs a new connection.</p>
+      <p class="fine">Approve a public connection to display it on your site. Renew an existing one to extend it in place; only a new pair needs a new connection.</p>
       ${connections.map((e) => this.connection(e)).join('')}
       <form action="/logout" method="post"><button>Sign out</button></form>`);
   }
 
+  /** One connection, with the state, the visibility and the expiry each said once. */
   private connection(e: Evidence) {
     const embed = `<script src="/assets/verity.js" defer></script>\n<verity-badge backend-url="${this.env.PUBLIC_ORIGIN}/api/verity" connection-id="${e.id}"></verity-badge>`;
 
-    return `<section><h3>${escape(e.external.handle)}: ${escape(statusLabel(e, Date.now()))}</h3>
-      <p>Visibility: ${escape(e.visibility)}. Expires: ${escape(new Date(e.expiresAt).toISOString())}</p>
-      ${e.visibility === 'public' ? `<p><a href="${escape(e.evidenceUrl)}">Inspect evidence</a></p><label>Embed on your site<textarea readonly rows="4" cols="80">${escape(embed)}</textarea></label>` : '<p>Unlisted connections cannot appear in a public pill.</p>'}
-      <p><a href="/api/verity/renew/${escape(e.id)}">Renew this connection</a>. Keeps the same connection ID, so embeds stay valid.</p>
+    return `<section><p class="who">${escape(e.providerName ?? e.provider)}</p>
+      <h3>${escape(externalName(e.external))}</h3>
+      <dl><dt>Status</dt><dd>${escape(statusLabel(e, Date.now()))}</dd>
+      <dt>Visibility</dt><dd>${escape(e.visibility)}</dd>
+      <dt>Expires</dt><dd>${escape(new Date(e.expiresAt).toISOString().replace(/\.\d{3}Z$/, 'Z'))}</dd></dl>
+      ${e.visibility === 'public' ? `<p><a href="${escape(e.evidenceUrl)}">Inspect evidence</a></p><label>Embed on your site<textarea readonly rows="4" cols="80">${escape(embed)}</textarea></label>` : '<p class="fine">Unlisted connections cannot appear in a public pill.</p>'}
+      <p><a href="/api/verity/renew/${escape(e.id)}">Renew this connection</a></p>
+      <p class="fine">Renewing keeps the same connection ID, so embeds stay valid.</p>
       <p><a href="/api/verity/visibility/${escape(e.id)}">Change visibility</a></p>
       <form action="/api/verity/connections/${escape(e.id)}/disconnect" method="post"><button>Revoke connection</button></form></section>`;
   }

@@ -16,6 +16,7 @@ import {
   fakeProvider,
   MemoryStorage,
   projectPage,
+  written,
 } from './helpers.js';
 
 function fixture(provider: FakeProvider = fakeProvider(), extra: Partial<ServiceOptions> = {}) {
@@ -439,10 +440,10 @@ test('a holder-paced proof is published, read back, and kept open for the reader
   // Nothing to redirect to: the holder publishes first, at their own pace.
   assert.equal(flow.authorizationUrl, undefined);
   assert.match(flow.expect!, /^Verity proof for Site: /);
-  assert.match(flow.instructions!, /Publish this line/);
+  assert.match(written(flow.instructions!), /Publish this line/);
 
   // Naming the site in the line means the holder sees what they are agreeing to.
-  assert.ok(flow.instructions!.includes(flow.expect!));
+  assert.ok(written(flow.instructions!).includes(flow.expect!));
 
   // A second flow cannot be completed with the first flow's artifact.
   const other = await f.service.start(alice);

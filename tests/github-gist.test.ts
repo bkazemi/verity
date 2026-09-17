@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { githubGistProvider } from '../src/server/github-gist.js';
+import { written } from './helpers.js';
 
 const expect = 'Verity proof for site.test: token';
 
@@ -37,8 +38,8 @@ test('a public gist containing the line identifies the account that published it
 
   // Read through the API by id, never by fetching the address the holder supplied.
   assert.deepEqual(calls, ['https://api.github.com/gists/0123456789abcdef01234567']);
-  assert.match(instance.instructions(expect), /public gist/);
-  assert.ok(instance.instructions(expect).includes(expect));
+  assert.match(written(instance.instructions(expect)), /public gist/);
+  assert.ok(written(instance.instructions(expect)).includes(expect));
 });
 
 test('the holder cannot point the check at anything but a gist', async () => {

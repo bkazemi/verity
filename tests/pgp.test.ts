@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { pgpProvider } from '../src/server/pgp.js';
 import { dearmor } from '../src/server/openpgp.js';
 import { wkdUrls } from '../src/server/wkd.js';
+import { written } from './helpers.js';
 
 const fixture = (name: string) =>
   readFile(new URL(`./fixtures/pgp/${name}`, import.meta.url), 'utf8');
@@ -62,8 +63,8 @@ test('a key proves itself by signing the line, and carries its fingerprint', asy
   // The method needs no registration anywhere, so it holds this backend to nothing.
   assert.equal(instance.artifact, 'document');
   assert.equal(instance.method, 'signature');
-  assert.match(instance.instructions(expect), /gpg --clearsign/);
-  assert.ok(instance.instructions(expect).includes(expect));
+  assert.match(written(instance.instructions(expect)), /gpg --clearsign/);
+  assert.ok(written(instance.instructions(expect)).includes(expect));
 });
 
 test('an address shows only where the key signed it and a keyserver confirmed it', async () => {
@@ -276,7 +277,7 @@ test('the keyserver is configurable and must be reached over https', async () =>
   // Both questions go to the configured host, and the holder is told which one that is.
   assert.equal(await instance.withdrawn!({ id: ed25519, handle: '', profileUrl: '' }, held), false);
   assert.deepEqual(custom.calls, [`https://keys.example/vks/v1/by-fingerprint/${ed25519}`]);
-  assert.match(instance.instructions(expect), /keys\.example/);
+  assert.match(written(instance.instructions(expect)), /keys\.example/);
 
   // A stored proof that will not parse never reaches the network.
   await assert.rejects(

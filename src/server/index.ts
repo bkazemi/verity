@@ -1,14 +1,19 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import {
   attestationLabel,
+  externalName,
   isArtifactProvider,
+  localSide,
   statusLabel,
   type Attestation,
   type Evidence,
   type Flow,
+  type Instruction,
   type LocalAccount,
 } from '../core/index.js';
 import { VerityService, Unavailable, type ServiceOptions } from './service.js';
+import { copyScript } from './copy.js';
+import { stylesheet, styleVersion } from './style.js';
 
 export { VerityService, Unavailable } from './service.js';
 
@@ -39,8 +44,8 @@ const escape = (value: unknown) =>
     (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!,
   );
 
-const page = (title: string, body: string) =>
-  `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(title)} · Verity</title><body><main><h1>${escape(title)}</h1>${body}</main></body></html>`;
+const page = (prefix: string, title: string, body: string) =>
+  `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(title)} · Verity</title><link rel="stylesheet" href="${escape(prefix)}/style.css?v=${styleVersion}"><body><main><h1>${escape(title)}</h1>${body}</main></body></html>`;
 
 const headers = {
   'Cache-Control': 'no-store',
@@ -82,13 +87,30 @@ const redirect = (url: string, cookie?: string) =>
     headers: { ...headers, Location: url, ...(cookie ? { 'Set-Cookie': cookie } : {}) },
   });
 
-function account(label: string, reference: string, url?: string) {
-  return `${escape(label)}, ${url ? `<a href="${escape(url)}" rel="noreferrer">${escape(reference)}</a>` : escape(reference)}`;
+/**
+ * One side of a link, with each thing known about it on its own line. A name, the
+ * identifier behind it and how it was shown are three separate claims, and a reader
+ * running them together in one sentence is the way to misread which was established.
+ *
+ * Both sides render as the same card, so the pair reads as a pair.
+ */
+function card(
+  heading: string,
+  name: string,
+  url: string | undefined,
+  reference?: string,
+  ...extra: string[]
+) {
+  const profile = url && safeUrl(url);
+
+  return `<div class="side"><p class="who">${escape(heading)}</p><p class="name">${
+    profile ? `<a href="${escape(profile)}" rel="noreferrer">${escape(name)}</a>` : escape(name)
+  }</p>${reference ? `<p class="reference">${escape(reference)}</p>` : ''}${extra.join('')}</div>`;
 }
 
 /**
- * Names how one side was established, next to that side. Where the method published a
- * proof the reader can open it, which is what lets them check the claim without taking
+ * Names how one side was established, inside that side's card. Where the method published
+ * a proof the reader can open it, which is what lets them check the claim without taking
  * this backend's word for it. Methods are named, never ranked.
  */
 function attestationNote(
@@ -103,11 +125,39 @@ function attestationNote(
   // only after being confirmed http(s).
   const artifact = attestation.artifactUrl && safeUrl(attestation.artifactUrl);
 
-  return `<br>${escape(label)}.${
+  return `<p class="how">${escape(label)}</p>${
     artifact
-      ? ` <a href="${escape(artifact)}" rel="noreferrer">View the proof</a>. Last checked: ${escape(new Date(attestation.confirmedAt).toISOString())}.`
+      ? `<p class="how"><a href="${escape(artifact)}" rel="noreferrer">View the proof</a></p>`
       : ''
   }`;
+}
+
+/** Seconds are the finest thing a record measured in days can mean; milliseconds are noise. */
+const moment = (time: number) => new Date(time).toISOString().replace(/\.\d{3}Z$/, 'Z');
+
+/**
+ * Every time on the page in one list. A date inside a sentence is a date a reader has to
+ * find; the times of a record belong together, where they can be compared at a glance.
+ */
+function times(rows: [string, number | undefined][]) {
+  return `<dl>${rows
+    .filter(([, time]) => time !== undefined)
+    .map(([label, time]) => `<dt>${escape(label)}</dt><dd>${escape(moment(time!))}</dd>`)
+    .join('')}</dl>`;
+}
+
+/**
+ * What the holder is told, as the provider wrote it. A command is set as a block and never
+ * reflowed: it is copied character for character, and one wrapped line is a broken command.
+ */
+function instructions(parts: Instruction[]) {
+  return parts
+    .map((part) =>
+      typeof part === 'string'
+        ? `<p>${escape(part)}</p>`
+        : `<pre><code>${escape(part.code)}</code></pre>`,
+    )
+    .join('');
 }
 
 function safeUrl(value: string) {
@@ -131,18 +181,46 @@ function subjectNoun(kind: string | undefined): string | undefined {
 function evidencePage(e: Evidence & { linkExpiresAt?: number }, base: string, report: string) {
   const names = { site: e.siteName, provider: e.providerName ?? e.provider };
 
+  const local = localSide(e.local, e.siteName);
+  const current = e.status !== 'revoked' && e.expiresAt > Date.now();
+
   return page(
+    base,
     `${statusLabel(e, Date.now())} connection`,
-    `
-    <p>${escape(e.siteName)}: ${account(e.local.label, e.local.reference, e.local.profileUrl)}${attestationNote(e.attestations?.local, names)}</p>
-    <p>${escape(names.provider)}: ${account(e.external.handle, e.external.id, e.external.profileUrl)}${attestationNote(e.attestations?.external, names)}</p>
-    <p>Provider authentication: ${escape(new Date(e.authenticatedAt).toISOString())}. Approval: ${escape(new Date(e.approvedAt).toISOString())}.</p>
-    <p>Status: ${escape(statusLabel(e, Date.now()))}. Verification expiry: ${escape(new Date(e.expiresAt).toISOString())}.</p>
-    ${e.linkExpiresAt ? `<p>Anyone with this link can view and forward it. Link expiry: ${escape(new Date(e.linkExpiresAt).toISOString())}.</p>` : ''}
-    <p>This connection does not establish legal identity, trustworthiness, content authorship, or permanent ownership.</p>
-    <p><a href="${escape(base)}/external-revoke/${escape(e.id)}">Remove this connection using your external account</a></p>
-    ${e.visibility === 'unlisted' ? `<p><a href="${escape(base)}/external-share-revoke/${escape(e.id)}">Revoke only this sharing link using your external account</a></p>` : ''}
-    <p><a href="${escape(report)}" rel="noreferrer">Report an incorrect record</a></p>`,
+    // The heading already names the site and the card already names the subject, so the
+    // site's own reference would be a third line saying the same thing. The provider's
+    // identifier stays: that one is the provider's word, not the site's own wording.
+    card(
+      local.heading,
+      local.value,
+      e.local.profileUrl,
+      undefined,
+      attestationNote(e.attestations?.local, names),
+    ) +
+      card(
+        names.provider,
+        externalName(e.external),
+        e.external.profileUrl,
+        e.external.id,
+        attestationNote(e.attestations?.external, names),
+      ) +
+      times([
+        ['Approved', e.approvedAt],
+        ['Authenticated', e.authenticatedAt],
+        [current ? 'Valid until' : 'Expired on', e.status === 'revoked' ? undefined : e.expiresAt],
+        ['Revoked on', e.revokedAt],
+        // Only a method that publishes an artifact drifts; a sign-in does not go stale.
+        [
+          'Last checked',
+          e.attestations?.external.artifactUrl ? e.attestations.external.confirmedAt : undefined,
+        ],
+        ['Sharing link expires', e.linkExpiresAt],
+      ]) +
+      `${e.linkExpiresAt ? '<p class="fine">Anyone with this link can view and forward it.</p>' : ''}
+    <p class="fine">This connection does not establish legal identity, trustworthiness, content authorship, or permanent ownership.</p>
+    <p class="fine"><a href="${escape(base)}/external-revoke/${escape(e.id)}">Remove this connection using your external account</a></p>
+    ${e.visibility === 'unlisted' ? `<p class="fine"><a href="${escape(base)}/external-share-revoke/${escape(e.id)}">Revoke only this sharing link using your external account</a></p>` : ''}
+    <p class="fine"><a href="${escape(report)}" rel="noreferrer">Report an incorrect record</a></p>`,
   );
 }
 
@@ -201,6 +279,7 @@ export function createVerity(options: ServerOptions) {
   function result(outcome: string, id = '') {
     return html(
       page(
+        prefix,
         'Verification result',
         `<p>${escape(outcome)}</p><div id="verity-result" data-outcome="${escape(outcome)}" data-id="${escape(id)}"></div><script src="${escape(prefix)}/result.js" defer></script><p>You can close this window and return to account settings.</p>`,
       ),
@@ -221,7 +300,7 @@ export function createVerity(options: ServerOptions) {
       url.origin !== base.origin ||
       !(url.pathname === prefix || url.pathname.startsWith(prefix + '/'))
     )
-      return html(page('Unavailable', ''), 404);
+      return html(page(prefix, 'Unavailable', ''), 404);
 
     const path = url.pathname.slice(prefix.length);
 
@@ -233,6 +312,26 @@ export function createVerity(options: ServerOptions) {
         throw new Unavailable();
 
       if (request.method === 'GET') {
+        // The one thing these pages cache, and only because its address carries its
+        // version. It holds no record of anybody, so it is the one response that may sit
+        // in a shared cache.
+        if (path === '/style.css')
+          return new Response(stylesheet, {
+            headers: {
+              ...headers,
+              'Cache-Control':
+                url.searchParams.get('v') === styleVersion
+                  ? 'public, max-age=31536000, immutable'
+                  : 'no-store',
+              'Content-Type': 'text/css; charset=utf-8',
+            },
+          });
+
+        if (path === '/copy.js')
+          return new Response(copyScript, {
+            headers: { ...headers, 'Content-Type': 'text/javascript' },
+          });
+
         if (path === '/result.js')
           return new Response(
             `const e=document.getElementById('verity-result');if(window.opener&&e){window.opener.postMessage({type:'verity-result',outcome:e.dataset.outcome,connectionId:e.dataset.id},location.origin);window.close()}`,
@@ -264,13 +363,22 @@ export function createVerity(options: ServerOptions) {
 
           return html(
             page(
+              prefix,
               external
                 ? 'Remove a connection'
                 : kind === 'renew'
                   ? 'Renew this connection'
                   : `Verify with ${options.provider.name}`,
               `
-            ${user ? `<p>${escape(options.siteName)}: ${account(user.label, user.reference, user.profileUrl)}</p>` : '<p>Authenticate with the matching external account to review and remove this link.</p>'}
+            ${
+              user
+                ? card(
+                    localSide(user, options.siteName).heading,
+                    localSide(user, options.siteName).value,
+                    user.profileUrl,
+                  )
+                : '<p>Authenticate with the matching external account to review and remove this link.</p>'
+            }
             <p>Confirm the connection between this ${escape(subjectNoun(user?.kind) ?? 'site')} and your ${escape(options.provider.name)} account.</p>
             <form method="${kind === 'connect' ? 'get' : 'post'}" action="${escape(prefix)}/sessions"><input type="hidden" name="kind" value="${kind}"><input type="hidden" name="connectionId" value="${escape(id)}"><button>Continue with ${escape(options.provider.name)}</button></form>`,
             ),
@@ -309,9 +417,9 @@ export function createVerity(options: ServerOptions) {
 
             return html(
               page(
+                prefix,
                 `Verify with ${options.provider.name}`,
-                `<p style="white-space:pre-wrap">${escape(options.provider.instructions(flow.expect))}</p>
-            <p><output>${escape(flow.expect)}</output></p>
+                `${instructions(options.provider.instructions(flow.expect))}
             <form method="post" action="${escape(prefix)}/flows/${escape(flow.id)}/submit">
             ${
               options.provider.artifact === 'document'
@@ -319,7 +427,8 @@ export function createVerity(options: ServerOptions) {
                 : '<label>Address of your published proof <input name="artifact" type="url" required></label>'
             }
             <button>Check my proof</button></form>
-            <p>Anyone can read this line and the account that published it. Do not publish anything else alongside it.</p>`,
+            <p class="fine">This line is public, as is whatever published it. Publish nothing else alongside it.</p>
+            <script src="${escape(prefix)}/copy.js" defer></script>`,
               ),
             );
           }
@@ -334,15 +443,25 @@ export function createVerity(options: ServerOptions) {
 
           return html(
             page(
+              prefix,
               ['revoke', 'share-revoke'].includes(flow.kind)
                 ? 'Remove connection'
                 : flow.kind === 'renew'
                   ? 'Renew connection'
                   : 'Confirm connection',
               `
-            <p>${escape(options.siteName)}: ${account(flow.local!.label, flow.local!.reference, flow.local!.profileUrl)}</p>
-            <p>${escape(options.provider.name)}: ${account(flow.external!.handle, flow.external!.id, flow.external!.profileUrl)}</p>
-            <p>${escape(options.siteName)} receives the result. Verified via ${escape(options.verifierName)}.</p>
+            ${card(
+              localSide(flow.local!, options.siteName).heading,
+              localSide(flow.local!, options.siteName).value,
+              flow.local!.profileUrl,
+            )}
+            ${card(
+              options.provider.name,
+              externalName(flow.external!),
+              flow.external!.profileUrl,
+              flow.external!.id,
+            )}
+            <p class="fine">${escape(options.siteName)} receives the result. Verified via ${escape(options.verifierName)}.</p>
             <form method="post" action="${escape(prefix)}/flows/${escape(flow.id)}/approve">
             ${['revoke', 'share-revoke', 'renew'].includes(flow.kind) ? '<input type="hidden" name="visibility" value="unlisted">' : '<fieldset><legend>Evidence visibility</legend><label><input type="radio" name="visibility" value="unlisted" checked>Unlisted</label><p>Anyone with a sharing link can view and forward it. No link is created until you choose to share.</p><label><input type="radio" name="visibility" value="public">Public: anyone can view both sides of this link</label></fieldset>'}
             <button name="action" value="approve">${['revoke', 'share-revoke'].includes(flow.kind) ? (flow.kind === 'share-revoke' ? 'Revoke sharing link' : 'Revoke connection') : flow.kind === 'renew' ? 'Renew connection' : 'Confirm connection'}</button>
@@ -486,9 +605,9 @@ export function createVerity(options: ServerOptions) {
     } catch (error) {
       // Never serialize/log exceptions: provider responses and request URLs can contain secrets.
       if (error instanceof Unavailable || error instanceof SyntaxError)
-        return html(page('Unavailable', '<p>This resource is unavailable.</p>'), 404);
+        return html(page(prefix, 'Unavailable', '<p>This resource is unavailable.</p>'), 404);
 
-      return html(page('Request failed', '<p>Please try again.</p>'), 500);
+      return html(page(prefix, 'Request failed', '<p>Please try again.</p>'), 500);
     }
   }
 
