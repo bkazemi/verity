@@ -31,6 +31,8 @@ const styles = `
   .account { padding: 14px 16px; border: 1px solid #e0e6df; border-radius: 10px; margin-top: 12px; }
   .account h3 { display: flex; align-items: center; gap: 6px; margin: 0 0 3px; color: #6b786f; font-size: 11px; font-weight: 550; }
   .account a, .account strong { font-weight: 650; font-size: 14px; }
+  /* The account's own name carries that weight; a link inside a line of prose does not. */
+  .summary a { font: inherit; }
   .reference { margin-top: 2px; }
   .method { margin-top: 8px; }
   .proof { margin-top: 2px; }
@@ -50,6 +52,19 @@ function node<K extends keyof HTMLElementTagNameMap>(tag: K, text = '', classNam
   element.className = className;
 
   return element;
+}
+
+/**
+ * Points an anchor out of the dialog. Every link here opens in a new tab: the dialog is
+ * read against what it links to, and following one in place would close the dialog and
+ * take the reader off the page the pill was on. `noreferrer` keeps the opener unreachable.
+ */
+function outward(anchor: HTMLAnchorElement, url: string): HTMLAnchorElement {
+  anchor.href = url;
+  anchor.rel = 'noreferrer';
+  anchor.target = '_blank';
+
+  return anchor;
 }
 
 /** Joins the two cards: the link itself, drawn rather than described. */
@@ -99,12 +114,8 @@ function attestationNote(
   if (!attestation.artifactUrl) return [note];
 
   const proof = node('div', '', 'muted proof');
-  const link = node('a', 'View the proof');
 
-  link.href = attestation.artifactUrl;
-  link.rel = 'noreferrer';
-
-  proof.append(link);
+  proof.append(outward(node('a', 'View the proof'), attestation.artifactUrl));
 
   return [note, proof];
 }
@@ -132,10 +143,7 @@ function accountCard(
 
   title.append(...heading);
 
-  if (value instanceof HTMLAnchorElement) {
-    value.href = url!;
-    value.rel = 'noreferrer';
-  }
+  if (value instanceof HTMLAnchorElement) outward(value, url!);
 
   card.append(title, value);
 
@@ -153,9 +161,17 @@ function render(content: HTMLElement, evidence: Evidence) {
   const summary = node('div', '', 'summary');
   const copy = node('div');
 
-  copy.append(node('div', status, 'state'), node('div', `via: ${evidence.verifierName}`, 'muted'));
+  // The verifier is named and reachable: this record on the verifier's own domain is
+  // what a reader checks the claim against, and a plain click on the pill opens this
+  // dialog rather than that page, so the way there belongs here.
+  const attribution = node('div', 'via: ', 'muted');
+  const verifier = outward(node('a', evidence.verifierName), evidence.evidenceUrl);
 
-  summary.append(verificationMark(!current), copy);
+  verifier.title = `View this record at ${evidence.verifierName} (opens in a new tab)`;
+  attribution.append(verifier);
+  copy.append(node('div', status, 'state'), attribution);
+
+  summary.append(verificationMark(current ? 'current' : 'inactive'), copy);
   const dates = node('dl');
   const dateRows: [string, number][] = [['Approved', evidence.approvedAt]];
 
@@ -224,8 +240,17 @@ function render(content: HTMLElement, evidence: Evidence) {
   );
 }
 
-/** Fetch fresh, permitted evidence; native dialog supplies focus containment and Escape dismissal. */
-export function openEvidenceDialog(opener: HTMLElement, load: () => Promise<Evidence>): void {
+/**
+ * Fetch fresh, permitted evidence; native dialog supplies focus containment and Escape
+ * dismissal. `opened` is the record the opener already holds: the dialog is drawn from it
+ * before it is shown, so it appears at the size it will keep rather than growing into its
+ * own contents, and the check that follows either leaves it alone or replaces it.
+ */
+export function openEvidenceDialog(
+  opener: HTMLElement,
+  load: () => Promise<Evidence>,
+  opened?: Evidence,
+): void {
   const existing = openDialogs.get(opener);
 
   if (existing?.open) {
@@ -262,6 +287,17 @@ export function openEvidenceDialog(opener: HTMLElement, load: () => Promise<Evid
 
   let refreshing = false;
   let expiryTimer: ReturnType<typeof setTimeout> | undefined;
+  let drawn: string | undefined;
+
+  /** Redraws only for a record that reads differently from the one already on screen. */
+  const draw = (evidence: Evidence) => {
+    const key = JSON.stringify([evidence, statusLabel(evidence, Date.now())]);
+
+    if (key === drawn) return;
+
+    drawn = key;
+    render(content, evidence);
+  };
 
   const refresh = async () => {
     if (refreshing) return;
@@ -274,16 +310,17 @@ export function openEvidenceDialog(opener: HTMLElement, load: () => Promise<Evid
       if (!dialog.open) return;
 
       clearTimeout(expiryTimer);
-      render(content, evidence);
+      draw(evidence);
       const remaining = evidence.expiresAt - Date.now();
 
       if (evidence.status === 'verified' && remaining > 0 && remaining <= 30000) {
         expiryTimer = setTimeout(() => {
-          if (dialog.open) render(content, evidence);
+          if (dialog.open) draw(evidence);
         }, remaining);
       }
     } catch {
       clearTimeout(expiryTimer);
+      drawn = undefined;
 
       if (dialog.open)
         content.replaceChildren(
@@ -324,6 +361,8 @@ export function openEvidenceDialog(opener: HTMLElement, load: () => Promise<Evid
     },
     { once: true },
   );
+
+  if (opened) draw(opened);
 
   dialog.showModal();
   void refresh();

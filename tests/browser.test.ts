@@ -8,6 +8,7 @@ class Element {
   private text = '';
   href = '';
   rel = '';
+  target = '';
   className = '';
   shadowRoot?: Element;
   tagName = '';
@@ -29,6 +30,15 @@ class Element {
     (this.listeners[type] ??= []).push(handler);
   }
 
+  /** Assignment replaces, as it does on a real element. */
+  set onclick(handler: ((event: unknown) => unknown) | null) {
+    this.listeners['click'] = handler ? [handler] : [];
+  }
+
+  get onclick(): ((event: unknown) => unknown) | null {
+    return this.listeners['click']?.[0] ?? null;
+  }
+
   removeEventListener() {}
 
   showModal() {
@@ -41,7 +51,19 @@ class Element {
 
   focus() {}
 
-  remove() {}
+  remove() {
+    const siblings = this.parentNode?.children;
+
+    if (siblings) siblings.splice(siblings.indexOf(this), 1);
+
+    this.parentNode = undefined;
+  }
+
+  get nextSibling(): Element | undefined {
+    const siblings = this.parentNode?.children ?? [];
+
+    return siblings[siblings.indexOf(this) + 1];
+  }
 
   /** Every element under this one, including through shadow roots. */
   all(): Element[] {
@@ -54,12 +76,20 @@ class Element {
     return this.shadowRoot;
   }
 
+  parentNode?: Element;
+
   append(...children: Element[]) {
+    for (const child of children) child.parentNode = this;
+
     this.children.push(...children);
   }
 
   setAttribute(name: string, value: string) {
     this.attributes[name] = value;
+  }
+
+  removeAttribute(name: string) {
+    delete this.attributes[name];
   }
 
   links(): Element[] {
@@ -86,6 +116,10 @@ class Element {
   }
 
   replaceChildren(...children: Element[]) {
+    for (const child of this.children) child.parentNode = undefined;
+
+    for (const child of children) child.parentNode = this;
+
     this.text = '';
     this.children = children;
   }
@@ -93,6 +127,8 @@ class Element {
 
 test('distributed badge renders current/expired/revoked evidence and fails closed on private or malformed results', async () => {
   const asset = await readFile(new URL('../dist/verity.js', import.meta.url), 'utf8');
+
+  let fetches = 0;
 
   let evidence: Record<string, unknown> = {
     id: 'original',
@@ -139,13 +175,20 @@ test('distributed badge renders current/expired/revoked evidence and fails close
         return el;
       },
     },
-    fetch: async () => ({ ok: true, json: async () => evidence }),
+    fetch: async () => {
+      fetches += 1;
+
+      return { ok: true, json: async () => evidence };
+    },
   });
 
   vm.runInContext(asset, context);
 
   const client = context.Verity.init({ backendUrl: '/api/verity' }) as {
-    mountBadge(element: Element, options: { connectionId: string }): Promise<void>;
+    mountBadge(
+      element: Element,
+      options: { connectionId: string; evidence?: unknown },
+    ): Promise<void>;
   };
 
   const element = new Element();
@@ -173,6 +216,65 @@ test('distributed badge renders current/expired/revoked evidence and fails close
 
   assert.ok(!element.textContent.includes('✓'));
   assert.equal(element.links().at(-1)!.href, 'https://site.test/api/verity/connections/original');
+
+  // A refresh keeps the pill on screen while it asks, and finding the same evidence
+  // leaves the very same nodes in place: a check nobody needed changes nothing.
+  const drawn = element.links()[0]!;
+  const refresh = client.mountBadge(element, { connectionId: 'original' });
+
+  assert.equal(element.links()[0], drawn);
+  assert.ok(!element.textContent.includes('Checking'));
+  await refresh;
+  assert.equal(element.links()[0], drawn);
+
+  // Evidence handed over is drawn from what the caller already has, not fetched again.
+  const seeded = new Element();
+  const asked = fetches;
+
+  await client.mountBadge(seeded, { connectionId: 'original', evidence });
+  assert.equal(fetches, asked);
+  assert.equal(seeded.textContent, '@<Alice>');
+  assert.equal(seeded.links().length, 1);
+
+  // A badge with nothing in hand draws the pill and its mark at once, claiming nothing,
+  // and the answer fills that same pill in rather than replacing it.
+  const cold = new Element();
+  const checking = client.mountBadge(cold, { connectionId: 'original' });
+  const frame = cold.find('a')[0]!;
+  const mark = cold.find('svg')[0]!;
+
+  assert.equal(frame.className, 'badge pending');
+  assert.equal(mark.attributes['class'], 'mark pending');
+
+  assert.deepEqual(
+    mark.find('path').map((path) => path.attributes['stroke']),
+    ['currentColor', 'currentColor'],
+  );
+
+  assert.equal(cold.textContent, '');
+  await checking;
+  assert.equal(cold.find('a')[0], frame);
+  assert.equal(cold.find('svg')[0], mark);
+  assert.equal(mark.attributes['class'], 'mark');
+
+  assert.deepEqual(
+    mark.find('path').map((path) => path.attributes['stroke']),
+    ['#D3444C', '#149766'],
+  );
+
+  assert.equal(cold.textContent, '@<Alice>');
+
+  // Evidence that fails its own checks is not drawn, however it arrived.
+  const refused = new Element();
+
+  await client.mountBadge(refused, {
+    connectionId: 'original',
+    evidence: { ...evidence, expiresAt: 'tomorrow' },
+  });
+
+  assert.match(refused.textContent, /Unavailable/);
+  assert.equal(refused.links().length, 0);
+
   evidence = { ...evidence, expiresAt: 1 };
   await client.mountBadge(element, { connectionId: 'original' });
   assert.match(element.textContent, /Expired/);
@@ -392,7 +494,15 @@ async function renderDialog(
   const open = pill.listeners['click']?.[0];
 
   assert.ok(open, 'the badge opens the dialog on click');
-  await open({ button: 0, preventDefault() {} });
+  open({ button: 0, preventDefault() {} });
+
+  const opened = body.all().find((found) => found.tagName === 'dialog')!;
+
+  // The dialog is drawn from the record the pill holds before it is shown, so it opens
+  // at its full size rather than growing out of a one-line placeholder.
+  assert.ok(opened, 'a dialog is attached to the document');
+  assert.ok(!opened.textContent.includes('Checking verification'));
+  assert.match(opened.textContent, /Verification does not guarantee/);
   await new Promise((resolve) => setTimeout(resolve, 0));
 
   const dialog = body.all().find((found) => found.tagName === 'dialog')!;
@@ -455,6 +565,13 @@ test('the evidence dialog presents both sides of a link as parallel cards', asyn
   const proof = external.links().find((link) => link.textContent.includes('View the proof'))!;
 
   assert.equal(proof.href, 'https://gist.github.com/alice/abc');
+
+  // Every link out of the dialog opens beside it: the record is read against what it
+  // links to, and following one in place would take the reader off the page.
+  for (const link of dialog.links()) {
+    assert.equal(link.target, '_blank');
+    assert.equal(link.rel, 'noreferrer');
+  }
 
   // Every time on the card sits in one table, so none of them read as prose.
   assert.deepEqual(

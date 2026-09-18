@@ -1,5 +1,5 @@
 import type { Evidence } from '../core/index.js';
-import { renderBadge, renderBadgeMessage } from './badge.js';
+import { badgeShown, renderBadge, renderBadgeMessage, renderBadgePending } from './badge.js';
 import { openEvidenceDialog } from './evidence-dialog.js';
 
 export type { Evidence } from '../core/index.js';
@@ -8,6 +8,12 @@ export interface Result {
   outcome: 'complete' | 'cancelled' | 'failed';
   connectionId?: string;
 }
+
+/**
+ * The most recent evidence read for a host, kept whether or not it changed the pill: a
+ * renewal moves dates the pill never shows, and the dialog opens on those dates.
+ */
+const latest = new WeakMap<HTMLElement, Evidence>();
 
 export function init({ backendUrl }: { backendUrl: string }) {
   const base = new URL(backendUrl, location.href);
@@ -109,22 +115,37 @@ export function init({ backendUrl }: { backendUrl: string }) {
 
       return data;
     },
-    async mountBadge(element: HTMLElement, { connectionId }: { connectionId: string }) {
-      renderBadgeMessage(element, 'Checking…');
+    async mountBadge(
+      element: HTMLElement,
+      { connectionId, evidence }: { connectionId: string; evidence?: Evidence },
+    ) {
+      // Evidence already in hand renders at once. Otherwise a host with nothing to show
+      // gets the waiting pill, whose frame and mark the finished badge keeps; a host that
+      // already shows a badge keeps it up until the check answers, so a periodic refresh
+      // never blinks the pill through an interim state.
+      if (!evidence && !badgeShown(element)) renderBadgePending(element);
 
       try {
-        const e = await client.getConnection(connectionId);
+        const e = evidence ?? (await client.getConnection(connectionId));
+
+        if (!validEvidence(e)) throw new Error('Invalid evidence response');
 
         if (e.visibility !== 'public') throw new Error('Unavailable');
 
         // Validate both links before rendering any provider details.
         safeUrl(e.external.profileUrl);
         safeUrl(e.evidenceUrl);
+        latest.set(element, e);
         const badge = renderBadge(element, e);
+
+        // Nothing changed: the pill on screen, and its handler, still stand.
+        if (!badge) return;
 
         badge.setAttribute('aria-haspopup', 'dialog');
 
-        badge.addEventListener('click', (event) => {
+        // Assigned rather than added: the pill is kept across renders, so a listener per
+        // render would stack up on the same element.
+        badge.onclick = (event: MouseEvent) => {
           if (
             event.button !== 0 ||
             event.ctrlKey ||
@@ -137,20 +158,29 @@ export function init({ backendUrl }: { backendUrl: string }) {
 
           event.preventDefault();
 
-          openEvidenceDialog(element, async () => {
-            const fresh = await client.getConnection(e.id);
+          // The pill was drawn from this record, so the dialog opens on it at full size
+          // and the check below either leaves it alone or replaces it.
+          const read = latest.get(element) ?? e;
 
-            if (fresh.visibility !== 'public') throw new Error('Unavailable');
+          openEvidenceDialog(
+            element,
+            async () => {
+              const fresh = await client.getConnection(read.id);
 
-            safeUrl(fresh.evidenceUrl);
-            safeUrl(fresh.external.profileUrl);
+              if (fresh.visibility !== 'public') throw new Error('Unavailable');
 
-            if (fresh.local.profileUrl) safeUrl(fresh.local.profileUrl);
+              safeUrl(fresh.evidenceUrl);
+              safeUrl(fresh.external.profileUrl);
 
-            return fresh;
-          });
-        });
+              if (fresh.local.profileUrl) safeUrl(fresh.local.profileUrl);
+
+              return fresh;
+            },
+            readable(read),
+          );
+        };
       } catch {
+        latest.delete(element);
         renderBadgeMessage(element, 'Unavailable');
       }
     },
@@ -164,6 +194,23 @@ export function init({ backendUrl }: { backendUrl: string }) {
 
 function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object';
+}
+
+/**
+ * The record as the dialog would draw it, or nothing if any link in it may not be
+ * rendered. The pill checks the two links it shows itself; the dialog shows one more.
+ */
+function readable(evidence: Evidence): Evidence | undefined {
+  try {
+    safeUrl(evidence.evidenceUrl);
+    safeUrl(evidence.external.profileUrl);
+
+    if (evidence.local.profileUrl) safeUrl(evidence.local.profileUrl);
+
+    return evidence;
+  } catch {
+    return undefined;
+  }
 }
 
 function safeUrl(value: string) {
@@ -244,10 +291,24 @@ if (typeof customElements !== 'undefined' && !customElements.get('verity-badge')
   customElements.define(
     'verity-badge',
     class extends HTMLElement {
+      /**
+       * Evidence an embed already fetched, handed over before the badge is presented so
+       * its first paint is the finished pill rather than a placeholder replaced a round
+       * trip later. It seeds one paint only; every later refresh is fetched.
+       */
+      evidence?: Evidence;
+
+      /**
+       * A badge may be placed before its connection is known: it then waits, showing the
+       * pill's own frame, until `connection-id` names what it presents.
+       */
+      static observedAttributes = ['backend-url', 'connection-id'];
+
       private timer?: ReturnType<typeof setInterval>;
+      private queued = false;
 
       connectedCallback() {
-        this.refresh();
+        this.present();
         this.timer = setInterval(() => this.refresh(), 30000);
       }
 
@@ -255,12 +316,42 @@ if (typeof customElements !== 'undefined' && !customElements.get('verity-badge')
         clearInterval(this.timer);
       }
 
-      private refresh() {
+      attributeChangedCallback() {
+        this.present();
+      }
+
+      /**
+       * Deferred by a microtask, so an embed that sets the backend, the connection and the
+       * evidence one after another is drawn once, from all three, before anything paints.
+       */
+      private present() {
+        if (this.queued) return;
+
+        this.queued = true;
+
+        queueMicrotask(() => {
+          this.queued = false;
+
+          if (!this.isConnected) return;
+
+          const seed = this.evidence;
+
+          this.evidence = undefined;
+          this.refresh(validEvidence(seed) && seed.visibility === 'public' ? seed : undefined);
+        });
+      }
+
+      private refresh(evidence?: Evidence) {
         const backendUrl = this.getAttribute('backend-url'),
           connectionId = this.getAttribute('connection-id');
 
-        if (backendUrl && connectionId)
-          void init({ backendUrl }).mountBadge(this, { connectionId });
+        if (!connectionId) {
+          renderBadgePending(this);
+
+          return;
+        }
+
+        if (backendUrl) void init({ backendUrl }).mountBadge(this, { connectionId, evidence });
       }
     },
   );
