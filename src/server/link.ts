@@ -1,5 +1,6 @@
 import { legacyHookDecode } from '@exodus/bytes/encoding.js';
 import htmlEncodingSniffer from 'html-encoding-sniffer';
+import { MIMEType } from 'node:util';
 import { html, parse, type DefaultTreeAdapterTypes } from 'parse5';
 import type { ArtifactProvider, ExternalAccount, LocalAccount } from '../core/index.js';
 import { discard, readBounded } from './body.js';
@@ -152,13 +153,15 @@ async function backlinked(
     if (points(href, page, subject)) return;
 
   // Anything else is shown as text, where markup is an example of a link and not one.
-  if (!rendered(response.headers.get('content-type')))
+  const type = mediaType(response.headers.get('content-type'));
+
+  if (!type || !rendered(type))
     throw new Error('Page is not HTML, and its headers carry no rel="me" link to this subject');
 
   // Finding the link in what was read still proves the claim; not finding it in part of
   // a page proves nothing.
   const { bytes, truncated } = await readBounded(response, maxBytes);
-  const text = decode(bytes, response.headers.get('content-type'));
+  const text = decode(bytes, type.params.get('charset') ?? undefined);
   const document = parse(text);
   const declared = firstBase(document);
   const base = baseUrl(declared, page);
@@ -371,9 +374,7 @@ function elements(
  * default after that. Read any other way, a page in UTF-16 or a legacy encoding shows this
  * different characters, and so different links, from the ones its readers see.
  */
-function decode(bytes: Uint8Array, contentType: string | null): string {
-  const charset = /;\s*charset\s*=\s*"?([^";\s]+)/i.exec(contentType ?? '')?.[1];
-
+function decode(bytes: Uint8Array, charset: string | undefined): string {
   const encoding = htmlEncodingSniffer(bytes, {
     ...(charset ? { transportLayerEncodingLabel: charset } : {}),
   });
@@ -420,12 +421,26 @@ function unmoved(href: string): boolean {
 }
 
 /**
+ * A `Content-Type` parsed as the web's MIME standard parses it, or nothing where it is
+ * missing or malformed. Two joined into one header by a comma are malformed.
+ */
+function mediaType(header: string | null): MIMEType | undefined {
+  if (header === null) return undefined;
+
+  try {
+    return new MIMEType(header);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Whether a response says it is HTML. XHTML is not taken: it is XML, where namespaces and
  * case decide what an element is, and an HTML parser would read elements it has no business
  * calling links.
  */
-function rendered(contentType: string | null): boolean {
-  return contentType?.split(';')[0]!.trim().toLowerCase() === 'text/html';
+function rendered(type: MIMEType): boolean {
+  return type.essence === 'text/html';
 }
 
 /** An attribute as the parser left it: entities decoded, and the first of any duplicates. */

@@ -434,6 +434,12 @@ test('a page is read in the encoding a browser would read it in', async () => {
     page,
   );
 
+  // Only a parameter named charset declares one, and never text inside another's quotes.
+  assert.deepEqual(
+    await bytes(utf16le(markup).subarray(2), 'text/html; x=";charset=utf-8"; charset=utf-16le'),
+    read,
+  );
+
   // Read as UTF-8 regardless, a page in UTF-16 has no links at all.
   await assert.rejects(bytes(utf16le(markup).subarray(2), 'text/html; charset=utf-8'));
 });
