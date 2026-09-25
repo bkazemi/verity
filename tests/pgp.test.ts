@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { pgpProvider } from '../src/server/pgp.js';
-import { dearmor } from '../src/server/openpgp.js';
+import { readCertificate } from '../src/server/openpgp.js';
 import { wkdUrls } from '../src/server/wkd.js';
 import { written } from './helpers.js';
 
@@ -152,12 +152,21 @@ test('a key with no confirmed address at all is named by its fingerprint', async
   });
 
   const account = await pgpProvider(stripped).verify({
-    artifact: await pasted('nouid.pub.asc', 'ed25519.sig.asc'),
+    artifact: await pasted('ed25519.pub.asc', 'ed25519.sig.asc'),
     expect,
   });
 
   assert.equal(account.handle, '1347 D93F EB13 42AF');
   assert.equal(account.id, ed25519);
+
+  // Pasted without a single name, though, the key has no self-signature to say what it may
+  // be used for or until when, so nothing it signed can count. gpg will not import one.
+  await assert.rejects(
+    pgpProvider(stripped).verify({
+      artifact: await pasted('nouid.pub.asc', 'ed25519.sig.asc'),
+      expect,
+    }),
+  );
 });
 
 test('a signature for a different line, key or flow proves nothing', async () => {
@@ -326,7 +335,7 @@ test('a domain publishing the key for its own mailbox confirms the address', asy
 });
 
 test('a directory is read as packets, which is how the scheme actually serves keys', async () => {
-  const packets = dearmor(await fixture('ed25519.pub.asc'), 'PUBLIC KEY BLOCK');
+  const packets = (await readCertificate(await fixture('ed25519.pub.asc'))).write();
 
   assert.ok(packets.length > 0);
   assert.notEqual(packets[0], '-'.charCodeAt(0));

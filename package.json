@@ -42,6 +42,7 @@
     "@types/node": "^22.0.0",
     "@types/pg": "^8.15.5",
     "html-encoding-sniffer": "^7.0.0",
+    "openpgp": "^6.3.2",
     "parse5": "^8.0.1",
     "pg": "^8.16.3",
     "undici": "^7.30.0"

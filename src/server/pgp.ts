@@ -1,5 +1,6 @@
 import type { ArtifactProvider, ExternalAccount } from '../core/index.js';
 import {
+  fingerprint,
   identities,
   readCertificate,
   readCleartext,
@@ -62,7 +63,7 @@ export function pgpProvider(
    */
   async function served(held: Certificate): Promise<Certificate | undefined> {
     const response = await request(
-      new URL(`/vks/v1/by-fingerprint/${held.key.fingerprint}`, keyserver).href,
+      new URL(`/vks/v1/by-fingerprint/${fingerprint(held)}`, keyserver).href,
       {
         headers: { Accept: 'application/pgp-keys' },
         redirect: 'error',
@@ -84,12 +85,11 @@ export function pgpProvider(
       await discard(response);
     }
 
-    const copy = readCertificate(text);
+    const copy = await readCertificate(text);
 
-    if (copy.key.fingerprint !== held.key.fingerprint) return undefined;
-
-    // The packets come from the keyserver. The key they are checked against does not.
-    return { ...copy, key: held.key };
+    // The packets come from the keyserver, and are only ever checked against this key: the
+    // fingerprint is a hash of the key itself, so a copy under it holds the same one.
+    return fingerprint(copy) === fingerprint(held) ? copy : undefined;
   }
 
   /**
@@ -136,7 +136,9 @@ export function pgpProvider(
 
       for (const url of wkdUrls(mailbox)) {
         try {
-          if ((await published(url))?.key.fingerprint === held.key.fingerprint) return mailbox;
+          const key = await published(url);
+
+          if (key && fingerprint(key) === fingerprint(held)) return mailbox;
         } catch {
           // Unreachable, redirected, or not a key. The next place, then nothing.
         }
@@ -190,29 +192,34 @@ export function pgpProvider(
       `Your key shows as its fingerprint. To show an email address instead, confirm it at ${keyserver.host} or publish your key in that domain's web key directory.`,
     ],
     async verify({ artifact, expect }): Promise<ExternalAccount> {
-      const certificate = readCertificate(artifact);
-      const message = readCleartext(artifact);
+      const certificate = await readCertificate(artifact);
+      const message = await readCleartext(artifact);
 
       if (!(await signed(certificate, message))) throw new Error('Signature does not check out');
 
       // The line must stand on its own. A token buried inside a longer sentence was signed
       // too, but it was not necessarily agreed to, and the holder is agreeing to a sentence.
-      if (!message.text.split('\n').some((line) => line.trim() === expect))
+      if (
+        !message
+          .getText()
+          .split('\n')
+          .some((line) => line.trim() === expect)
+      )
         throw new Error('Signed message does not contain the line');
 
       return {
-        id: certificate.key.fingerprint,
+        id: fingerprint(certificate),
         kind: 'key',
         // What a reader recognises is an address, not forty hex digits. It is shown only
         // where it was confirmed, and the fingerprint stands in wherever it was not.
-        handle: (await confirmed(certificate)) ?? short(certificate.key.fingerprint),
-        profileUrl: new URL(`/search?q=0x${certificate.key.fingerprint}`, keyserver).href,
+        handle: (await confirmed(certificate)) ?? short(fingerprint(certificate)),
+        profileUrl: new URL(`/search?q=0x${fingerprint(certificate)}`, keyserver).href,
       };
     },
     async withdrawn(account, artifact): Promise<boolean> {
-      const held = readCertificate(artifact);
+      const held = await readCertificate(artifact);
 
-      if (held.key.fingerprint !== account.id) return false;
+      if (fingerprint(held) !== account.id) return false;
 
       const copy = await served(held);
 

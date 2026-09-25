@@ -18,7 +18,9 @@ test('Cloudflare SQLite transactions, persistent owner sessions, OAuth, public e
     bundle: true,
     format: 'esm',
     platform: 'neutral',
-    // What wrangler resolves a package by, where one ships no `exports` of its own.
+    // What wrangler resolves a package by: its export conditions, or where it ships no
+    // `exports` of its own, these fields.
+    conditions: ['workerd', 'worker', 'browser'],
     mainFields: ['module', 'main'],
     external: ['node:*'],
     alias: { undici: './cloudflare/undici.ts' },
