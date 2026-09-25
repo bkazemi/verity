@@ -16,8 +16,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/images/badge.png" alt="A profile card with a Verity badge showing a GitHub account" width="460" />
-  <img src="docs/images/dialog.png" alt="The verification details dialog the badge opens" width="232" />
+  <img src="docs/images/badge.png" alt="A profile card with a Verity badge showing a GitHub account" width="480" />
 </p>
 
 Verity is a self-hosted library for Node.js. A signed-in user of your site proves they control an external account, by signing in with GitHub, publishing a gist, linking back with `rel="me"`, or signing with an OpenPGP key. They approve the connection, and Verity publishes it as a record anyone can inspect, with a badge for their profile.
@@ -133,6 +132,12 @@ Then place the badge wherever the account appears:
 <script src="/assets/verity.js" defer></script>
 <verity-badge backend-url="/api/verity" connection-id="CONNECTION_ID"></verity-badge>
 ```
+
+Clicking the badge opens the verification details:
+
+<p align="center">
+  <img src="docs/images/dialog.png" alt="The verification details dialog: the local account, the linked GitHub account, its status, and when it was approved, expires and was last checked" width="448" />
+</p>
 
 The badge refreshes every 30 seconds, and only ever reads public evidence. The client can also start and end connections, and draw a badge into an element of your own:
 
