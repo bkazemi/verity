@@ -36,6 +36,7 @@ const styles = `
   .reference { margin-top: 2px; }
   .method { margin-top: 8px; }
   .proof { margin-top: 2px; }
+  .further { margin-top: 2px; }
   .joiner { display: block; width: 20px; height: 20px; margin: 8px auto -4px; color: #90a096; }
   dl { margin: 16px 0 0; padding-top: 12px; border-top: 1px solid #e5e9e3; display: grid; grid-template-columns: auto 1fr; gap: 5px 16px; font-size: 11px; }
   dt { color: #6b786f; }
@@ -118,6 +119,33 @@ function attestationNote(
   proof.append(outward(node('a', 'View the proof'), attestation.artifactUrl));
 
   return [note, proof];
+}
+
+/**
+ * The other methods the same account was shown by, each on one line beneath the main
+ * one. They corroborate it rather than compete with it, so they are set smaller and
+ * carry their proof on the same line.
+ */
+function furtherNotes(
+  attestations: Attestation[] | undefined,
+  names: { site: string; provider: string },
+): HTMLElement[] {
+  return (attestations ?? []).flatMap((attestation) => {
+    const label = attestationLabel(attestation.method, names);
+
+    if (!label) return [];
+
+    const note = node('div', `+ ${label}`, 'muted further');
+
+    if (attestation.artifactUrl) {
+      note.append(
+        document.createTextNode(' · '),
+        outward(node('a', 'View the proof'), attestation.artifactUrl),
+      );
+    }
+
+    return [note];
+  });
 }
 
 /** Seconds are noise on a record measured in days, and every time here reads the same way. */
@@ -223,6 +251,7 @@ function render(content: HTMLElement, evidence: Evidence) {
     // above it, so it cannot sit before that state has been given.
     summary,
     ...attestationNote(evidence.attestations?.external, names),
+    ...furtherNotes(evidence.attestations?.further, names),
     dates,
   );
 

@@ -2,7 +2,7 @@ import type { DurableObjectNamespace, DurableObjectState } from '@cloudflare/wor
 import { externalName, localSide, statusLabel, type Evidence } from '../src/core/index.js';
 import { logo } from '../src/logo.js';
 import { styleVersion } from '../src/server/style.js';
-import { createVerity, githubProvider } from '../src/server/index.js';
+import { createVerity, githubLinkProvider, githubProvider } from '../src/server/index.js';
 import { CloudflareStorage } from './storage.js';
 import { OwnerAuth } from './auth.js';
 import type { LocalKind } from '../src/core/index.js';
@@ -161,10 +161,15 @@ export class VerityStore {
 
     this.app = createVerity({
       storage: new CloudflareStorage(ctx.storage),
-      provider: githubProvider({
-        clientId: env.GITHUB_CLIENT_ID,
-        clientSecret: env.GITHUB_CLIENT_SECRET,
-      }),
+      // Two ways of showing one GitHub account. Whichever is used first is the record's
+      // main method, and the other is listed beneath it once used.
+      provider: [
+        githubProvider({
+          clientId: env.GITHUB_CLIENT_ID,
+          clientSecret: env.GITHUB_CLIENT_SECRET,
+        }),
+        githubLinkProvider(),
+      ],
       baseUrl: `${env.PUBLIC_ORIGIN}/api/verity`,
       siteName: env.SITE_NAME,
       // The verifier is the origin that ran the flow and serves the evidence, which a

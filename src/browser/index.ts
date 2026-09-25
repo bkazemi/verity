@@ -231,21 +231,26 @@ function validAttestations(value: unknown): boolean {
 
   if (!record(value)) return false;
 
-  return ['local', 'external'].every((side) => {
-    const attestation = value[side];
+  return (
+    validAttestation(value.local) &&
+    validAttestation(value.external) &&
+    (value.further === undefined ||
+      (Array.isArray(value.further) && value.further.every(validAttestation)))
+  );
+}
 
-    if (!record(attestation)) return false;
+function validAttestation(attestation: unknown): boolean {
+  if (!record(attestation)) return false;
 
-    return (
-      ['backend', 'provider'].includes(String(attestation.by)) &&
-      typeof attestation.method === 'string' &&
-      typeof attestation.confirmedAt === 'number' &&
-      Number.isFinite(attestation.confirmedAt) &&
-      (attestation.expect === undefined || typeof attestation.expect === 'string') &&
-      // Rendered as a link later, so only http(s) may ever reach an href.
-      (attestation.artifactUrl === undefined || httpUrl(attestation.artifactUrl))
-    );
-  });
+  return (
+    ['backend', 'provider'].includes(String(attestation.by)) &&
+    typeof attestation.method === 'string' &&
+    typeof attestation.confirmedAt === 'number' &&
+    Number.isFinite(attestation.confirmedAt) &&
+    (attestation.expect === undefined || typeof attestation.expect === 'string') &&
+    // Rendered as a link later, so only http(s) may ever reach an href.
+    (attestation.artifactUrl === undefined || httpUrl(attestation.artifactUrl))
+  );
 }
 
 function httpUrl(value: unknown): boolean {
@@ -276,7 +281,7 @@ function validEvidence(value: unknown): value is Evidence {
     validAttestations(value.attestations) &&
     (value.local.kind === undefined || typeof value.local.kind === 'string') &&
     (value.external.kind === undefined ||
-      ['account', 'key'].includes(String(value.external.kind))) &&
+      ['account', 'key', 'page'].includes(String(value.external.kind))) &&
     (value.revokedAt === undefined ||
       (typeof value.revokedAt === 'number' && Number.isFinite(value.revokedAt))) &&
     ['verified', 'expired', 'revoked'].includes(String(value.status)) &&

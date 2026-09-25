@@ -1,7 +1,9 @@
 import { createHash, randomBytes } from 'node:crypto';
 import {
+  fresh,
   freshnessMs,
   isArtifactProvider,
+  providerMethod,
   status,
   type ArtifactProvider,
   type Attestation,
@@ -11,6 +13,7 @@ import {
   type ExternalAccount,
   type Flow,
   type LocalAccount,
+  type Method,
   type Provider,
   type RedirectProvider,
   type Storage,
@@ -30,7 +33,12 @@ export class Unavailable extends Error {
 
 export interface ServiceOptions {
   storage: Storage;
-  provider: Provider;
+  /**
+   * The methods this instance offers. Several may share a provider id: `githubProvider()`,
+   * `githubGistProvider()` and `githubLinkProvider()` are three ways to show one GitHub
+   * account, and a record shown by more than one keeps them all. The first is the default.
+   */
+  provider: Provider | Provider[];
   baseUrl: string;
   siteName: string;
   verifierName: string;
@@ -49,10 +57,19 @@ export interface ServiceOptions {
 export class VerityService {
   readonly now: () => number;
   readonly baseUrl: string;
+  readonly providers: Provider[];
 
   constructor(readonly options: ServiceOptions) {
     this.now = options.now ?? Date.now;
     this.baseUrl = options.baseUrl.replace(/\/$/, '');
+    this.providers = Array.isArray(options.provider) ? options.provider : [options.provider];
+
+    // A flow names its method by provider id and method, so that pair must say which.
+    const keys = this.providers.map((p) => `${p.id} ${providerMethod(p)}`);
+
+    if (!keys.length || new Set(keys).size !== keys.length)
+      throw new Error('Configure each provider method once');
+
     const url = new URL(this.baseUrl);
 
     if (
@@ -118,7 +135,35 @@ export class VerityService {
     return structuredClone(local);
   }
 
-  async start(local?: LocalAccount, connectionId?: string, kind: Flow['kind'] = 'connect') {
+  /**
+   * The configured method a caller asked for: a provider id and, where that provider is
+   * shown more than one way, which way. Nothing asked for means the first configured.
+   */
+  resolve(provider?: string, method?: string): Provider {
+    const found = this.providers.find(
+      (p) =>
+        (provider === undefined || p.id === provider) &&
+        (method === undefined || providerMethod(p) === method),
+    );
+
+    if (!found) throw new Unavailable();
+
+    return found;
+  }
+
+  /** The method a flow was started with. A flow from before methods were recorded ran the first. */
+  providerOf(flow: Flow): Provider {
+    return flow.provider === undefined
+      ? this.providers[0]!
+      : this.resolve(flow.provider, flow.method);
+  }
+
+  async start(
+    local?: LocalAccount,
+    connectionId?: string,
+    kind: Flow['kind'] = 'connect',
+    choice: { provider?: string; method?: string } = {},
+  ) {
     if (kind === 'connect' && !local) throw new Unavailable();
 
     if (local) local = this.validateLocal(local);
@@ -141,16 +186,15 @@ export class VerityService {
       expiresAt: this.now() + (this.options.flowTtlMs ?? 600000),
     };
 
-    const artifact = isArtifactProvider(this.options.provider) ? this.options.provider : undefined;
+    const provider = await this.options.storage.transaction(async (tx) => {
+      // Whose link this is. A flow against an existing connection may carry no local
+      // subject of its own, and the record is the authority on it in any case.
+      let subject = local;
 
-    // Unguessable and per-flow, so an artifact published for one flow cannot complete
-    // another, and naming the site means the holder can see what they are agreeing to
-    // before they publish anything.
-    if (artifact) flow.expect = `Verity proof for ${this.options.siteName}: ${secret()}`;
+      let connection: Connection | undefined;
 
-    await this.options.storage.transaction(async (tx) => {
       if (kind !== 'connect') {
-        const connection = await tx.get('connections', connectionId!);
+        connection = await tx.get('connections', connectionId!);
 
         // No account disclosure at entry; only the matching provider account can inspect later.
         if (
@@ -159,10 +203,33 @@ export class VerityService {
           (['visibility', 'renew'].includes(kind) && connection.local.id !== local?.id)
         )
           throw new Unavailable();
+
+        subject = connection.local;
       }
 
+      const provider = this.chosen(kind, choice, connection);
+
+      flow.provider = provider.id;
+      flow.method = providerMethod(provider);
+      const artifact = isArtifactProvider(provider) ? provider : undefined;
+
+      // Unguessable and per-flow, so an artifact published for one flow cannot complete
+      // another, and naming the site means the holder can see what they are agreeing to
+      // before they publish anything. A method that points back at the subject has no such
+      // freedom: the subject's address is the whole claim, so that method states it here
+      // and gives up per-flow uniqueness for a standing link that is read again on a
+      // schedule instead.
+      if (artifact)
+        flow.expect = artifact.expect
+          ? artifact.expect(subject!)
+          : `Verity proof for ${this.options.siteName}: ${secret()}`;
+
       await tx.put('flows', flow.id, flow);
+
+      return provider;
     });
+
+    const artifact = isArtifactProvider(provider) ? provider : undefined;
 
     // A redirect provider hands the holder to its own site; an artifact provider tells
     // them what to publish and waits for them to say where they put it.
@@ -176,7 +243,7 @@ export class VerityService {
       : {
           flowId: flow.id,
           binding,
-          authorizationUrl: (this.options.provider as RedirectProvider).authorizationUrl({
+          authorizationUrl: (provider as RedirectProvider).authorizationUrl({
             state,
             challenge: hash(verifier),
             redirectUri: `${this.baseUrl}/callback`,
@@ -185,23 +252,56 @@ export class VerityService {
   }
 
   /**
+   * Which method a flow runs. A flow on an existing record stays in that record's
+   * namespace, and without a choice it uses the method the record was first shown by.
+   *
+   * Removing a link from the external side takes a method whose proof is fresh. A standing
+   * proof, such as a link back, is there for anyone to point at: handing one back shows
+   * the link exists, not that whoever handed it back holds the account.
+   */
+  private chosen(
+    kind: Flow['kind'],
+    choice: { provider?: string; method?: string },
+    connection?: Connection,
+  ): Provider {
+    let provider: Provider;
+
+    if (choice.provider === undefined && choice.method === undefined && connection) {
+      const main = connection.attestations?.external.method ?? 'oauth';
+
+      provider =
+        this.providers.find((p) => p.id === connection.provider && providerMethod(p) === main) ??
+        this.resolve(connection.provider);
+    } else provider = this.resolve(choice.provider, choice.method);
+
+    if (connection && provider.id !== connection.provider) throw new Unavailable();
+
+    if (
+      ['revoke', 'share-revoke'].includes(kind) &&
+      isArtifactProvider(provider) &&
+      provider.expect
+    )
+      throw new Unavailable();
+
+    return provider;
+  }
+
+  /**
    * Accepts what the holder hands back: the address they published the flow's string at,
    * or the proof itself. Both are holder-supplied, so the provider decides what counts.
    */
   async submit(id: string, binding: string, artifact: string): Promise<string> {
-    const provider = this.options.provider;
-
-    if (!isArtifactProvider(provider)) throw new Unavailable();
-
-    const expect = await this.options.storage.transaction(async (tx) => {
+    const { provider, expect } = await this.options.storage.transaction(async (tx) => {
       const flow = await this.bound(tx, id, binding);
+      const provider = this.providerOf(flow);
 
-      if (flow.phase !== 'pending' || !flow.expect) throw new Unavailable();
+      if (flow.phase !== 'pending' || !flow.expect || !isArtifactProvider(provider))
+        throw new Unavailable();
 
       flow.phase = 'exchanging';
       await tx.put('flows', id, flow);
 
-      return flow.expect;
+      return { provider, expect: flow.expect };
     });
 
     try {
@@ -234,7 +334,8 @@ export class VerityService {
     const claimed = await this.options.storage.transaction(async (tx) => {
       const flow = await this.bound(tx, id, binding);
 
-      if (flow.phase !== 'pending') throw new Unavailable();
+      if (flow.phase !== 'pending' || isArtifactProvider(this.providerOf(flow)))
+        throw new Unavailable();
 
       flow.phase = code ? 'exchanging' : 'cancelled';
       const verifier = flow.verifier!;
@@ -242,13 +343,13 @@ export class VerityService {
       delete flow.verifier;
       await tx.put('flows', id, flow);
 
-      return { flow, verifier };
+      return { provider: this.providerOf(flow) as RedirectProvider, verifier };
     });
 
     if (!code) return id;
 
     try {
-      const external = await (this.options.provider as RedirectProvider).authenticate({
+      const external = await claimed.provider.authenticate({
         code,
         verifier: claimed.verifier,
         redirectUri: `${this.baseUrl}/callback`,
@@ -293,8 +394,8 @@ export class VerityService {
 
         if (
           !connection ||
-          connection.provider !== this.options.provider.id ||
-          connection.external.id !== external.id ||
+          connection.provider !== this.providerOf(flow).id ||
+          !matches(flow.kind, connection.external, external) ||
           connection.revokedAt !== undefined
         )
           throw new Unavailable();
@@ -352,8 +453,16 @@ export class VerityService {
       }
 
       let connection: Connection;
+      const provider = this.providerOf(flow);
+      const joined = flow.kind === 'connect' ? await this.joins(tx, flow) : undefined;
 
-      if (flow.kind === 'connect') {
+      if (joined) {
+        // Another way of showing an account this subject is already linked to. The record
+        // keeps its id, its visibility and the method it was first shown by; this one is
+        // added beneath it, and like a renewal it extends the record it just reproved.
+        connection = joined;
+        this.corroborate(connection, flow, provider);
+      } else if (flow.kind === 'connect') {
         // The id exists before the record does, because a hosted proof is addressed by it.
         const connectionId = secret();
 
@@ -361,14 +470,17 @@ export class VerityService {
           id: connectionId,
           local: flow.local!,
           external: flow.external!,
-          provider: this.options.provider.id,
+          provider: provider.id,
           visibility,
           visibilityApprovedAt: this.now(),
           authenticatedAt: flow.authenticatedAt!,
           approvedAt: this.now(),
           expiresAt: this.now() + (this.options.validityMs ?? 30 * 86400000),
-          attestations: this.attestations(flow, connectionId),
-          proof: this.hosted() ? flow.artifact : undefined,
+          attestations: {
+            local: this.declared(),
+            external: this.attestation(flow, provider, connectionId),
+          },
+          proof: hosted(provider) ? flow.artifact : undefined,
         };
       } else {
         const existing = await tx.get('connections', flow.connectionId!);
@@ -376,7 +488,7 @@ export class VerityService {
         if (
           !existing ||
           existing.revokedAt !== undefined ||
-          existing.external.id !== flow.external!.id
+          !matches(flow.kind, existing.external, flow.external!)
         )
           throw new Unavailable();
 
@@ -390,16 +502,7 @@ export class VerityService {
           // subject snapshot refreshes because the holder just approved what it shows.
           if (flow.local!.id !== existing.local.id) throw new Unavailable();
 
-          connection.local = flow.local!;
-          connection.authenticatedAt = flow.authenticatedAt!;
-          connection.approvedAt = this.now();
-          connection.expiresAt = this.now() + (this.options.validityMs ?? 30 * 86400000);
-          connection.revocationReason = undefined;
-          // Both sides were just re-established: the holder reauthenticated and the site
-          // reasserted the subject it displays. A visibility change re-establishes neither.
-          connection.attestations = this.attestations(flow, connection.id);
-
-          if (this.hosted()) connection.proof = flow.artifact;
+          this.corroborate(connection, flow, provider);
         } else if (flow.kind === 'revoke') {
           connection.revokedAt = this.now();
           connection.revocationReason = 'external';
@@ -428,6 +531,26 @@ export class VerityService {
     });
   }
 
+  /**
+   * The methods a reader is shown. A further method whose proof has gone unread no longer
+   * corroborates anything, so it is left out until it reads again; the main one is never
+   * left out, because the record's status already says what became of it.
+   */
+  private shown(connection: Connection): Attestations {
+    if (!connection.attestations)
+      // Records written before methods were stored still have a known method: the site
+      // declared its subject and the provider ran the redirect flow, the only one built.
+      return {
+        local: { by: 'backend', method: 'declared', confirmedAt: connection.approvedAt },
+        external: { by: 'provider', method: 'oauth', confirmedAt: connection.authenticatedAt },
+      };
+
+    const { further, ...main } = connection.attestations;
+    const current = further?.filter((a) => fresh(a, this.now(), this.freshness));
+
+    return current?.length ? { ...main, further: current } : main;
+  }
+
   evidence(connection: Connection): Evidence {
     const { id: _privateId, ...local } = connection.local;
 
@@ -437,12 +560,7 @@ export class VerityService {
       external: connection.external,
       provider: connection.provider,
       providerName: this.providerName(connection.provider),
-      attestations: connection.attestations ?? {
-        // Records written before methods were stored still have a known method: the site
-        // declared its subject and the provider ran the redirect flow, the only one built.
-        local: { by: 'backend', method: 'declared', confirmedAt: connection.approvedAt },
-        external: { by: 'provider', method: 'oauth', confirmedAt: connection.authenticatedAt },
-      },
+      attestations: this.shown(connection),
       siteName: this.options.siteName,
       verifierName: this.options.verifierName,
       visibility: connection.visibility,
@@ -457,16 +575,127 @@ export class VerityService {
   }
 
   /**
-   * A link's two sides are vouched for by different parties. The site is the only authority
-   * on its own namespace, so it declares the local subject; the provider establishes the
-   * external account by whatever method its implementation uses.
+   * The live record a connect flow reproves by another method, if there is one: the same
+   * subject linked to the same account on the same provider, first shown some other way.
+   * The same method again is a second record, as it always was; renewing is how that
+   * one is extended.
    */
-  private attestations(flow: Flow, connectionId: string): Attestations {
-    const provider = this.options.provider;
+  private async joins(tx: Transaction, flow: Flow): Promise<Connection | undefined> {
+    const provider = this.providerOf(flow);
 
+    return (await tx.list('connections'))
+      .filter(
+        (c) =>
+          c.revokedAt === undefined &&
+          c.local.id === flow.local!.id &&
+          c.provider === provider.id &&
+          (c.attestations?.external.method ?? 'oauth') !== providerMethod(provider) &&
+          sameAccount(c.external, flow.external!) &&
+          // A record first shown by a proof naming the subject's old address is a record
+          // of that address. Joining it would show its proof beside the new one.
+          (!c.attestations || this.names(c, c.attestations.external, flow.local!)),
+      )
+      .sort((a, b) => b.approvedAt - a.approvedAt)[0];
+  }
+
+  /**
+   * The record a connect flow awaiting approval would add its method to, so the approval
+   * page can say so: the holder is not creating a link but reproving one, and the
+   * visibility already chosen for it stands.
+   */
+  async joining(flow: Flow): Promise<Connection | undefined> {
+    if (flow.kind !== 'connect' || flow.phase !== 'approval') return undefined;
+
+    return this.options.storage.transaction((tx) => this.joins(tx, flow));
+  }
+
+  /**
+   * Records that a flow just showed the record's account again. Shown by the method the
+   * record was first shown by, it replaces that one; shown another way, it takes that
+   * method's place beneath it, or joins them. Either way the holder approved it and the
+   * site reasserted its subject, so the record is extended and its subject refreshed.
+   */
+  private corroborate(connection: Connection, flow: Flow, provider: Provider) {
+    const attestation = this.attestation(flow, provider, connection.id);
+    const main = connection.attestations?.external.method ?? 'oauth';
+
+    connection.local = flow.local!;
+    connection.approvedAt = this.now();
+    connection.expiresAt = this.now() + (this.options.validityMs ?? 30 * 86400000);
+    connection.revocationReason = undefined;
+
+    if (attestation.method === main) {
+      connection.authenticatedAt = flow.authenticatedAt!;
+
+      // The account is taken as this method just named it. A recheck asks the same method
+      // about the new proof and compares ids exactly, and an address read with different
+      // case names the same profile under a different id.
+      connection.external = flow.external!;
+
+      connection.attestations = {
+        local: this.declared(),
+        external: attestation,
+        further: connection.attestations?.further,
+      };
+    } else {
+      // A proof that named the subject's old address proves nothing about its new one,
+      // and rereading it would go on confirming a link to where the subject used to be.
+      const further = (connection.attestations?.further ?? []).filter((a) =>
+        this.names(connection, a, flow.local!),
+      );
+
+      const at = further.findIndex((a) => a.method === attestation.method);
+
+      // A method already listed keeps its place: the order is the order each was first used.
+      if (at < 0) further.push(attestation);
+      else further[at] = attestation;
+
+      connection.attestations = {
+        local: this.declared(),
+        external: connection.attestations?.external ?? {
+          by: 'provider',
+          method: 'oauth',
+          confirmedAt: connection.authenticatedAt,
+        },
+        further,
+      };
+    }
+
+    if (hosted(provider)) connection.proof = flow.artifact;
+  }
+
+  /**
+   * Whether a proof still names the subject as it is now. A method that has the holder
+   * publish something derived from the subject, as a link back publishes its address,
+   * proved the subject as it was then; one whose proof is a token minted per flow names no
+   * subject, and holds whatever the subject's address becomes.
+   */
+  private names(connection: Connection, attestation: Attestation, local: LocalAccount): boolean {
+    const provider = this.providers.find(
+      (p) => p.id === connection.provider && providerMethod(p) === attestation.method,
+    );
+
+    if (attestation.expect === undefined || !provider || !isArtifactProvider(provider)) return true;
+
+    if (!provider.expect) return true;
+
+    try {
+      return provider.expect(local) === attestation.expect;
+    } catch {
+      return false;
+    }
+  }
+
+  /** The site is the only authority on its own namespace, so it declares the local subject. */
+  private declared(): Attestation {
+    return { by: 'backend', method: 'declared', confirmedAt: this.now() };
+  }
+
+  /** How the provider established the external account, by whatever method the flow ran. */
+  private attestation(flow: Flow, provider: Provider, connectionId: string): Attestation {
     const external: Attestation = {
       by: 'provider',
-      method: provider.method ?? 'oauth',
+      method: providerMethod(provider),
       confirmedAt: flow.authenticatedAt!,
     };
 
@@ -486,14 +715,7 @@ export class VerityService {
       if (hosted) external.hosted = true;
     }
 
-    return { local: { by: 'backend', method: 'declared', confirmedAt: this.now() }, external };
-  }
-
-  /** Whether the configured provider hands over a proof for this backend to publish. */
-  private hosted(): boolean {
-    const provider = this.options.provider;
-
-    return isArtifactProvider(provider) && provider.artifact === 'document';
+    return external;
   }
 
   /**
@@ -517,7 +739,7 @@ export class VerityService {
 
   /** A record from a provider this instance no longer configures keeps its raw id. */
   private providerName(provider: string): string {
-    return this.options.provider.id === provider ? this.options.provider.name : provider;
+    return this.providers.find((p) => p.id === provider)?.name ?? provider;
   }
 
   async read(id: string, local?: LocalAccount): Promise<Evidence> {
@@ -655,29 +877,27 @@ export class VerityService {
    * Returns how many were confirmed. A connection revoked here is not one of them.
    */
   async recheck(budget = 5): Promise<number> {
-    const provider = this.options.provider;
-
-    // A hosted proof is only worth asking about when the method has somewhere to ask.
-    if (!isArtifactProvider(provider) || budget <= 0) return 0;
-
-    if (provider.artifact === 'document' && !provider.withdrawn) return 0;
+    if (budget <= 0) return 0;
 
     const interval = this.options.recheckMs ?? 86400000;
     const now = this.now();
 
     const due = await this.options.storage.transaction(async (tx) =>
       (await tx.list('connections'))
-        .filter(
-          (c) =>
-            c.revokedAt === undefined &&
-            c.expiresAt > now &&
-            c.provider === provider.id &&
-            c.attestations?.external.artifactUrl &&
-            c.attestations.external.expect &&
-            (provider.artifact === 'location' ? !c.attestations.external.hosted : c.proof) &&
-            c.attestations.external.confirmedAt + interval <= now,
+        .filter((c) => c.revokedAt === undefined && c.expiresAt > now && c.attestations)
+        .flatMap((connection) =>
+          [connection.attestations!.external, ...(connection.attestations!.further ?? [])]
+            .map((attestation) => ({
+              connection,
+              attestation,
+              provider: this.rereads(connection, attestation),
+            }))
+            .filter(
+              (item): item is Due =>
+                item.provider !== undefined && item.attestation.confirmedAt + interval <= now,
+            ),
         )
-        .sort((a, b) => a.attestations!.external.confirmedAt - b.attestations!.external.confirmedAt)
+        .sort((a, b) => a.attestation.confirmedAt - b.attestation.confirmedAt)
         .slice(0, budget),
     );
 
@@ -685,57 +905,91 @@ export class VerityService {
 
     // Serially and outside any transaction: storage here serializes writes, so holding one
     // open across a fetch would stall every other request behind the slowest provider.
-    for (const connection of due) {
-      const { artifactUrl, expect } = connection.attestations!.external;
-      let withdrawn = false;
-
-      try {
-        if (provider.artifact === 'document')
-          withdrawn = await this.deadline(
-            provider.withdrawn!(connection.external, connection.proof!),
-          );
-        else {
-          const external = await this.deadline(
-            provider.verify({ artifact: artifactUrl!, expect: expect! }),
-          );
-
-          // The proof must still be the same holder's. An account that changed hands has
-          // not reproved anything, whatever is published at the old address.
-          if (external.id !== connection.external.id) continue;
-        }
-      } catch {
-        continue;
-      }
-
-      confirmed += await this.options.storage.transaction(async (tx) => {
-        const current = await tx.get('connections', connection.id);
-
-        // It may have been revoked or reproved while the fetch was in flight.
-        if (!current?.attestations || current.revokedAt !== undefined) return 0;
-
-        if (current.attestations.external.artifactUrl !== artifactUrl) return 0;
-
-        // The holder said this identity is no longer theirs, which is a choice, not decay.
-        if (withdrawn) {
-          current.revokedAt = this.now();
-          current.revocationReason = 'withdrawn';
-          await tx.put('connections', connection.id, current);
-          await this.invalidateShare(tx, connection.id);
-          await this.audit(tx, connection.id, 'revoke', 'external');
-
-          return 0;
-        }
-
-        current.attestations.external.confirmedAt = this.now();
-        // For an artifact method this field means last confirmed, not first authenticated.
-        current.authenticatedAt = this.now();
-        await tx.put('connections', connection.id, current);
-
-        return 1;
-      });
-    }
+    for (const item of due) confirmed += await this.reread(item);
 
     return confirmed;
+  }
+
+  /**
+   * The configured method that can ask again about one attestation, or nothing when there
+   * is nothing to ask: no published proof, a method this instance no longer runs, or a
+   * hosted proof whose method has nowhere to hear of a withdrawal.
+   */
+  private rereads(connection: Connection, attestation: Attestation): ArtifactProvider | undefined {
+    if (!attestation.artifactUrl || !attestation.expect) return undefined;
+
+    const provider = this.providers.find(
+      (p) => p.id === connection.provider && providerMethod(p) === attestation.method,
+    );
+
+    if (!provider || !isArtifactProvider(provider)) return undefined;
+
+    if (provider.artifact === 'location') return attestation.hosted ? undefined : provider;
+
+    return provider.withdrawn && connection.proof ? provider : undefined;
+  }
+
+  /** Asks about one proof and records the answer. Returns 1 when it confirmed. */
+  private async reread({ connection, attestation, provider }: Due): Promise<number> {
+    const { artifactUrl, expect, method } = attestation;
+    const main = attestation === connection.attestations!.external;
+    let withdrawn = false;
+
+    try {
+      if (provider.artifact === 'document')
+        withdrawn = await this.deadline(
+          provider.withdrawn!(connection.external, connection.proof!),
+        );
+      else {
+        const external = await this.deadline(
+          provider.verify({ artifact: artifactUrl!, expect: expect! }),
+        );
+
+        // The proof must still be the same holder's. An account that changed hands has
+        // not reproved anything, whatever is published at the old address.
+        if (
+          main
+            ? external.id !== connection.external.id
+            : !sameAccount(connection.external, external)
+        )
+          return 0;
+      }
+    } catch {
+      return 0;
+    }
+
+    return this.options.storage.transaction(async (tx) => {
+      const current = await tx.get('connections', connection.id);
+
+      // It may have been revoked or reproved while the fetch was in flight.
+      if (!current?.attestations || current.revokedAt !== undefined) return 0;
+
+      const held = main
+        ? current.attestations.external
+        : current.attestations.further?.find((a) => a.method === method);
+
+      if (held?.method !== method || held.artifactUrl !== artifactUrl) return 0;
+
+      // The holder said this identity is no longer theirs, which is a choice, not decay.
+      if (withdrawn) {
+        current.revokedAt = this.now();
+        current.revocationReason = 'withdrawn';
+        await tx.put('connections', connection.id, current);
+        await this.invalidateShare(tx, connection.id);
+        await this.audit(tx, connection.id, 'revoke', 'external');
+
+        return 0;
+      }
+
+      held.confirmedAt = this.now();
+
+      // For an artifact method this field means last confirmed, not first authenticated.
+      if (main) current.authenticatedAt = this.now();
+
+      await tx.put('connections', connection.id, current);
+
+      return 1;
+    });
   }
 
   /** A provider that never answers must not hold up the maintenance run behind it. */
@@ -801,4 +1055,51 @@ export class VerityService {
       visibility,
     });
   }
+}
+
+/** One proof waiting to be read again, and the method that reads it. */
+interface Due {
+  connection: Connection;
+  attestation: Attestation;
+  provider: ArtifactProvider;
+}
+
+/**
+ * Whether two methods named the same account. Where both carry an id their provider
+ * issued, that id settles it. A method that learns only an address, as a link back does,
+ * names the account by its profile, so against one of those the profiles are compared:
+ * the account behind the number GitHub issued is the one at that address for as long as
+ * the address is theirs. Only accounts compare this way; a page or a key is named by
+ * nothing but itself.
+ */
+function sameAccount(a: ExternalAccount, b: ExternalAccount): boolean {
+  if (a.id === b.id) return true;
+
+  if (![a.kind, b.kind].every((kind) => kind === undefined || kind === 'account')) return false;
+
+  if (a.id !== a.profileUrl && b.id !== b.profileUrl) return false;
+
+  return profile(a.profileUrl) === profile(b.profileUrl);
+}
+
+/**
+ * Whether a flow of this kind showed the record's account. Removal from the external side
+ * is started and approved by nobody local, so it takes the provider-issued id alone: a
+ * profile address can change hands, and its next owner must not be able to remove the
+ * last one's record. The weaker match is only for flows the local holder approves.
+ */
+function matches(kind: Flow['kind'], held: ExternalAccount, shown: ExternalAccount): boolean {
+  if (kind === 'revoke' || kind === 'share-revoke') return held.id === shown.id;
+
+  return sameAccount(held, shown);
+}
+
+/** A profile address as it compares. Handles are compared without case, as providers issue them. */
+function profile(url: string): string {
+  return url.replace(/\/+$/, '').toLowerCase();
+}
+
+/** Whether a method hands over a proof for this backend to publish. */
+function hosted(provider: Provider): boolean {
+  return isArtifactProvider(provider) && provider.artifact === 'document';
 }

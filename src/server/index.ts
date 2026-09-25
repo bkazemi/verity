@@ -4,12 +4,15 @@ import {
   externalName,
   isArtifactProvider,
   localSide,
+  providerMethod,
   statusLabel,
   type Attestation,
+  type Attestations,
   type Evidence,
   type Flow,
   type Instruction,
   type LocalAccount,
+  type Provider,
 } from '../core/index.js';
 import { VerityService, Unavailable, type ServiceOptions } from './service.js';
 import { copyScript } from './copy.js';
@@ -21,6 +24,8 @@ export { VerityService, Unavailable } from './service.js';
 export { githubProvider } from './github.js';
 
 export { githubGistProvider } from './github-gist.js';
+
+export { linkProvider, githubLinkProvider, type LinkProviderOptions } from './link.js';
 
 export { pgpProvider } from './pgp.js';
 
@@ -117,6 +122,7 @@ function card(
 function attestationNote(
   attestation: Attestation | undefined,
   names: { site: string; provider: string },
+  further = false,
 ) {
   const label = attestation && attestationLabel(attestation.method, names);
 
@@ -126,11 +132,44 @@ function attestationNote(
   // only after being confirmed http(s).
   const artifact = attestation.artifactUrl && safeUrl(attestation.artifactUrl);
 
-  return `<p class="how">${escape(label)}</p>${
+  return `<p class="how${further ? ' further' : ''}">${further ? '+ ' : ''}${escape(label)}${
     artifact
-      ? `<p class="how"><a href="${escape(artifact)}" rel="noreferrer">View the proof</a></p>`
+      ? `${further ? ' · ' : '</p><p class="how">'}<a href="${escape(artifact)}" rel="noreferrer">View the proof</a>`
       : ''
-  }`;
+  }</p>`;
+}
+
+/** The external side's methods: the one it was first shown by, then each one since. */
+function externalNotes(
+  attestations: Attestations | undefined,
+  names: { site: string; provider: string },
+) {
+  return (
+    attestationNote(attestations?.external, names) +
+    (attestations?.further ?? []).map((a) => attestationNote(a, names, true)).join('')
+  );
+}
+
+/**
+ * What a holder does to use one method, for a page offering several. A single method needs
+ * no such wording: continuing with the provider is all there is to choose.
+ */
+function methodAction(provider: Provider): string {
+  const actions: Record<string, string> = {
+    oauth: `Sign in with ${provider.name}`,
+    attestation: `Publish a proof on ${provider.name}`,
+    backlink: `Link back from ${provider.name}`,
+    signature: `Sign with ${provider.name}`,
+    dns: 'Add a DNS record',
+    wellknown: 'Publish a file on your domain',
+  };
+
+  return actions[providerMethod(provider)] ?? `Continue with ${provider.name}`;
+}
+
+/** Names the providers on offer once each, however many ways each can be shown. */
+function providerNames(providers: Provider[]): string {
+  return [...new Set(providers.map((p) => p.name))].join(' or ');
 }
 
 /** Seconds are the finest thing a record measured in days can mean; milliseconds are noise. */
@@ -203,7 +242,7 @@ function evidencePage(e: Evidence & { linkExpiresAt?: number }, base: string, re
         externalName(e.external),
         e.external.profileUrl,
         e.external.id,
-        attestationNote(e.attestations?.external, names),
+        externalNotes(e.attestations, names),
       ) +
       times([
         ['Approved', e.approvedAt],
@@ -275,6 +314,32 @@ export function createVerity(options: ServerOptions) {
     }
 
     return Object.fromEntries(new URLSearchParams(text));
+  }
+
+  /**
+   * The methods a page offers. A flow on an existing record stays in its namespace, so
+   * where the holder is signed in that record narrows the list; removing a link from the
+   * external side refuses a standing proof, which anybody can hand back.
+   */
+  async function offer(
+    kind: Flow['kind'],
+    id: string,
+    user: LocalAccount | undefined,
+    requested: string | null,
+  ): Promise<Provider[]> {
+    let namespace = requested ?? undefined;
+
+    if (user && id) namespace = (await service.read(id, user)).provider;
+
+    const offered = service.providers.filter(
+      (p) =>
+        (namespace === undefined || p.id === namespace) &&
+        !(['revoke', 'share-revoke'].includes(kind) && isArtifactProvider(p) && p.expect),
+    );
+
+    if (!offered.length) throw new Unavailable();
+
+    return offered;
   }
 
   function result(outcome: string, id = '') {
@@ -361,6 +426,15 @@ export function createVerity(options: ServerOptions) {
 
           const user = external ? undefined : await local(request);
           const id = kind === 'connect' ? '' : path.split('/').at(-1)!;
+          const offered = await offer(kind, id, user, url.searchParams.get('provider'));
+
+          // One form per method. With one on offer the provider is all there is to name.
+          const forms = offered
+            .map(
+              (p) =>
+                `<form method="${kind === 'connect' ? 'get' : 'post'}" action="${escape(prefix)}/sessions"><input type="hidden" name="kind" value="${kind}"><input type="hidden" name="connectionId" value="${escape(id)}"><input type="hidden" name="provider" value="${escape(p.id)}"><input type="hidden" name="method" value="${escape(providerMethod(p))}"><button>${escape(offered.length > 1 ? methodAction(p) : `Continue with ${p.name}`)}</button></form>`,
+            )
+            .join('');
 
           return html(
             page(
@@ -369,7 +443,7 @@ export function createVerity(options: ServerOptions) {
                 ? 'Remove a connection'
                 : kind === 'renew'
                   ? 'Renew this connection'
-                  : `Verify with ${options.provider.name}`,
+                  : `Verify with ${providerNames(offered)}`,
               `
             ${
               user
@@ -380,8 +454,9 @@ export function createVerity(options: ServerOptions) {
                   )
                 : '<p>Authenticate with the matching external account to review and remove this link.</p>'
             }
-            <p>Confirm the connection between this ${escape(subjectNoun(user?.kind) ?? 'site')} and your ${escape(options.provider.name)} account.</p>
-            <form method="${kind === 'connect' ? 'get' : 'post'}" action="${escape(prefix)}/sessions"><input type="hidden" name="kind" value="${kind}"><input type="hidden" name="connectionId" value="${escape(id)}"><button>Continue with ${escape(options.provider.name)}</button></form>`,
+            <p>Confirm the connection between this ${escape(subjectNoun(user?.kind) ?? 'site')} and your ${escape(providerNames(offered))} account.</p>
+            ${kind === 'renew' && offered.length > 1 ? '<p class="fine">Renewing another way adds that method beneath the one this connection was first shown by.</p>' : ''}
+            ${forms}`,
             ),
           );
         }
@@ -401,7 +476,11 @@ export function createVerity(options: ServerOptions) {
         }
 
         if (path === '/sessions' && url.searchParams.get('kind') === 'connect') {
-          const flow = await service.start(await local(request), undefined, 'connect');
+          const flow = await service.start(await local(request), undefined, 'connect', {
+            provider: url.searchParams.get('provider') ?? undefined,
+            method: url.searchParams.get('method') ?? undefined,
+          });
+
           const cookie = `${cookieName}=${flow.binding}; HttpOnly; SameSite=Lax; Path=${prefix || '/'}; Max-Age=${Math.ceil((options.flowTtlMs ?? 600000) / 1000)}${base.protocol === 'https:' ? '; Secure' : ''}`;
 
           return redirect(entry(flow), cookie);
@@ -409,26 +488,31 @@ export function createVerity(options: ServerOptions) {
 
         if (path.startsWith('/flows/')) {
           const flow = await service.flow(path.slice(7), binding(request));
+          const provider = service.providerOf(flow);
 
           // Holder-paced: nothing has been proved yet, so the page says what to publish
           // and waits. The line is public by design, which is what makes it checkable.
-          if (flow.phase === 'pending' && flow.expect && isArtifactProvider(options.provider)) {
+          if (flow.phase === 'pending' && flow.expect && isArtifactProvider(provider)) {
             if (!['revoke', 'share-revoke'].includes(flow.kind))
               if ((await local(request)).id !== flow.local?.id) throw new Unavailable();
 
             return html(
               page(
                 prefix,
-                `Verify with ${options.provider.name}`,
-                `${instructions(options.provider.instructions(flow.expect))}
+                `Verify with ${provider.name}`,
+                `${instructions(provider.instructions(flow.expect))}
             <form method="post" action="${escape(prefix)}/flows/${escape(flow.id)}/submit">
             ${
-              options.provider.artifact === 'document'
+              provider.artifact === 'document'
                 ? '<label>Your proof <textarea name="artifact" rows="14" cols="72" required></textarea></label>'
-                : '<label>Address of your published proof <input name="artifact" type="url" required></label>'
+                : `<label>${provider.method === 'backlink' ? 'Address of the page carrying your link' : 'Address of your published proof'} <input name="artifact" type="url" required></label>`
             }
             <button>Check my proof</button></form>
-            <p class="fine">This line is public, as is whatever published it. Publish nothing else alongside it.</p>
+            <p class="fine">${
+              provider.method === 'backlink'
+                ? 'This link is public, as is the page you point at. Anyone reading either one can follow it here.'
+                : 'This line is public, as is whatever published it. Publish nothing else alongside it.'
+            }</p>
             <script src="${escape(prefix)}/copy.js" defer></script>`,
               ),
             );
@@ -442,6 +526,11 @@ export function createVerity(options: ServerOptions) {
           )
             throw new Unavailable();
 
+          // A second way of showing an account already linked here joins that record, whose
+          // visibility was chosen when it was made and is not the holder's to rechoose here.
+          const joined = await service.joining(flow);
+          const kept = ['revoke', 'share-revoke', 'renew'].includes(flow.kind) || joined;
+
           return html(
             page(
               prefix,
@@ -449,7 +538,9 @@ export function createVerity(options: ServerOptions) {
                 ? 'Remove connection'
                 : flow.kind === 'renew'
                   ? 'Renew connection'
-                  : 'Confirm connection',
+                  : joined
+                    ? 'Add to connection'
+                    : 'Confirm connection',
               `
             ${card(
               localSide(flow.local!, options.siteName).heading,
@@ -457,15 +548,16 @@ export function createVerity(options: ServerOptions) {
               flow.local!.profileUrl,
             )}
             ${card(
-              options.provider.name,
+              provider.name,
               externalName(flow.external!),
               flow.external!.profileUrl,
               flow.external!.id,
             )}
+            ${joined ? `<p>This account is already linked here. Confirming adds this method to that connection, beneath the one it was first shown by, and it stays ${escape(joined.visibility)}.</p>` : ''}
             <p class="fine">${escape(options.siteName)} receives the result. Verified via ${escape(options.verifierName)}.</p>
             <form method="post" action="${escape(prefix)}/flows/${escape(flow.id)}/approve">
-            ${['revoke', 'share-revoke', 'renew'].includes(flow.kind) ? '<input type="hidden" name="visibility" value="unlisted">' : '<fieldset><legend>Evidence visibility</legend><label><input type="radio" name="visibility" value="unlisted" checked>Unlisted</label><p>Anyone with a sharing link can view and forward it. No link is created until you choose to share.</p><label><input type="radio" name="visibility" value="public">Public: anyone can view both sides of this link</label></fieldset>'}
-            <button name="action" value="approve">${['revoke', 'share-revoke'].includes(flow.kind) ? (flow.kind === 'share-revoke' ? 'Revoke sharing link' : 'Revoke connection') : flow.kind === 'renew' ? 'Renew connection' : 'Confirm connection'}</button>
+            ${kept ? '<input type="hidden" name="visibility" value="unlisted">' : '<fieldset><legend>Evidence visibility</legend><label><input type="radio" name="visibility" value="unlisted" checked>Unlisted</label><p>Anyone with a sharing link can view and forward it. No link is created until you choose to share.</p><label><input type="radio" name="visibility" value="public">Public: anyone can view both sides of this link</label></fieldset>'}
+            <button name="action" value="approve">${['revoke', 'share-revoke'].includes(flow.kind) ? (flow.kind === 'share-revoke' ? 'Revoke sharing link' : 'Revoke connection') : flow.kind === 'renew' ? 'Renew connection' : joined ? 'Add to connection' : 'Confirm connection'}</button>
             <button name="action" value="cancel">Cancel</button></form><p><a href="${escape(prefix)}/verify">Use a different external account</a></p>`,
             ),
           );
@@ -520,9 +612,11 @@ export function createVerity(options: ServerOptions) {
         if (path === '/connect') {
           await local(request);
 
-          if (data.provider !== options.provider.id) throw new Unavailable();
+          const provider = service.resolve(data.provider);
 
-          return json({ url: `${service.baseUrl}/verify` });
+          return json({
+            url: `${service.baseUrl}/verify?provider=${encodeURIComponent(provider.id)}`,
+          });
         }
 
         if (path === '/sessions') {
@@ -537,6 +631,7 @@ export function createVerity(options: ServerOptions) {
             ['revoke', 'share-revoke'].includes(kind) ? undefined : await local(request),
             data.connectionId || undefined,
             kind,
+            { provider: data.provider || undefined, method: data.method || undefined },
           );
 
           const cookie = `${cookieName}=${flow.binding}; HttpOnly; SameSite=Lax; Path=${prefix || '/'}; Max-Age=${Math.ceil((options.flowTtlMs ?? 600000) / 1000)}${base.protocol === 'https:' ? '; Secure' : ''}`;

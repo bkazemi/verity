@@ -45,7 +45,8 @@ function parts(address: string): { local: string; domain: string } | undefined {
   const local = address.slice(0, at);
   const domain = address.slice(at + 1).toLowerCase();
 
-  // A host, not an address literal and not something that resolves inside the network.
+  // A host, not an address literal and not a suffix that resolves inside the network.
+  // Where the name really resolves is checked when it is fetched.
   if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(domain))
     return undefined;
 

@@ -8,7 +8,12 @@ import {
   signed,
   type Certificate,
 } from './openpgp.js';
+import { discard, readBounded } from './body.js';
+import { pinnable, publicFetch } from './public-fetch.js';
 import { wkdUrls } from './wkd.js';
+
+/** How much of a served key is read. Enough for a key and its signatures, and no more. */
+const maxKeyBytes = 65536;
 
 /**
  * Proves control of an OpenPGP key by having the holder sign the flow's line with it.
@@ -30,9 +35,23 @@ import { wkdUrls } from './wkd.js';
  * from the mailbox, so nobody outside that domain is being taken at their word.
  */
 export function pgpProvider(
-  options: { keyserver?: string; fetch?: typeof fetch } = {},
+  options: {
+    keyserver?: string;
+    /**
+     * Replaces the transport for both the keyserver and the web key directory, and with it
+     * the check that keeps directory reads out of the network this runs in. Pass one only
+     * where it enforces that itself, such as through an egress proxy.
+     */
+    fetch?: typeof fetch;
+  } = {},
 ): ArtifactProvider {
   const request = options.fetch ?? fetch;
+
+  // The keyserver is the operator's choice; a directory's host is a stranger's, named by
+  // an address on their key, so where it resolves is checked on the connection itself.
+  // Off Node that cannot be done, and the directory is skipped rather than read unguarded:
+  // it only ever upgrades a fingerprint to an address.
+  const directory = options.fetch ?? (pinnable() ? publicFetch() : undefined);
   const keyserver = new URL(options.keyserver ?? 'https://keys.openpgp.org');
 
   if (keyserver.protocol !== 'https:') throw new Error('Keyserver must be HTTPS');
@@ -51,13 +70,21 @@ export function pgpProvider(
       },
     );
 
-    // Never uploaded, or since deleted. There is nowhere for anything to be published,
-    // which is not the same as nothing having been published anywhere.
-    if (response.status === 404) return undefined;
+    let text: string;
 
-    if (!response.ok) throw new Error('Keyserver unavailable');
+    try {
+      // Never uploaded, or since deleted. There is nowhere for anything to be published,
+      // which is not the same as nothing having been published anywhere.
+      if (response.status === 404) return undefined;
 
-    const copy = readCertificate((await response.text()).slice(0, 65536));
+      if (!response.ok) throw new Error('Keyserver unavailable');
+
+      text = new TextDecoder().decode((await readBounded(response, maxKeyBytes)).bytes);
+    } finally {
+      await discard(response);
+    }
+
+    const copy = readCertificate(text);
 
     if (copy.key.fingerprint !== held.key.fingerprint) return undefined;
 
@@ -67,19 +94,28 @@ export function pgpProvider(
 
   /**
    * A key published at a mailbox's own well-known address. Fetched from a host named by a
-   * stranger's key, so it is a GET to a fixed path on an https origin and nothing else: no
-   * redirects to follow, a deadline, and a bounded read.
+   * stranger's key, so it is a GET to a fixed path on an https origin at a public address
+   * and nothing else: no redirects to follow, a deadline, and a bounded read.
    */
   async function published(url: string): Promise<Certificate | undefined> {
-    const response = await request(url, {
+    if (!directory) return undefined;
+
+    const response = await directory(url, {
       headers: { Accept: 'application/octet-stream' },
       redirect: 'error',
       signal: AbortSignal.timeout(10000),
     });
 
-    if (!response.ok) return undefined;
+    let body: Uint8Array;
 
-    const body = new Uint8Array((await response.arrayBuffer()).slice(0, 65536));
+    try {
+      if (!response.ok) return undefined;
+
+      body = (await readBounded(response, maxKeyBytes)).bytes;
+    } finally {
+      await discard(response);
+    }
+
     const text = new TextDecoder().decode(body.subarray(0, 40));
 
     // The scheme says packets. Some hosts serve armour anyway, and both are the same key.

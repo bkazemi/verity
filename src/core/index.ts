@@ -21,8 +21,10 @@ export interface ExternalAccount {
   /**
    * What the other side is. Absent means an account, which is what a provider issues and
    * can reassign. A key is not an account: nobody issued it and nobody can hand it over.
+   * A page is an address that was read and nothing more: a method that only fetches a
+   * document learns what it says, never whose account the address is.
    */
-  kind?: 'account' | 'key';
+  kind?: 'account' | 'key' | 'page';
   handle: string;
   profileUrl: string;
 }
@@ -36,7 +38,8 @@ export interface ExternalAccount {
  * form of the others: a site is the only authority on its own namespace, so no external
  * source could improve on it. The rest publish an artifact a reader can fetch.
  */
-export type Method = 'declared' | 'oauth' | 'attestation' | 'dns' | 'wellknown' | 'signature';
+export type Method =
+  'declared' | 'oauth' | 'attestation' | 'backlink' | 'dns' | 'wellknown' | 'signature';
 
 /** Who vouches for one side: this backend from its own records, or the account's provider. */
 export type Attester = 'backend' | 'provider';
@@ -68,7 +71,14 @@ export interface Attestation {
 /** Each side of a link is attested separately, by different parties under different methods. */
 export interface Attestations {
   local: Attestation;
+  /** How the external account was first shown. It stays the main one for the record's life. */
   external: Attestation;
+  /**
+   * Every other method the same external account has since been shown by, in the order
+   * each was first used, at most one per method. They corroborate the main one and never
+   * replace it: a record is still judged by `external`.
+   */
+  further?: Attestation[];
 }
 
 export interface Connection {
@@ -109,6 +119,12 @@ export interface Flow {
   expect?: string;
   /** What the holder handed back: an address to read, or the proof itself. */
   artifact?: string;
+  /**
+   * Which configured method the flow runs: the provider's id and its method. Absent on
+   * flows written by a backend that had only one, which is the first one configured.
+   */
+  provider?: string;
+  method?: Method;
 }
 
 export interface Share {
@@ -175,6 +191,14 @@ export interface ArtifactProvider {
   name: string;
   method: Exclude<Method, 'declared' | 'oauth'>;
   /**
+   * What the holder must publish, for a method that does not get to choose it. A backlink
+   * says the far side points at this exact subject, so the subject's own address is the
+   * whole of what is proved and a per-flow token could not be part of it. Absent means the
+   * backend mints an unguessable string instead, which is what a method wants when any
+   * fresh artifact will do. Throw when the subject cannot be proved this way at all.
+   */
+  expect?(local: LocalAccount): string;
+  /**
    * Where the proof lives. `location` means the holder publishes it somewhere only they
    * can write and hands back an address, so the address is half of what is proved.
    * `document` means they hand back the proof itself and this backend publishes it,
@@ -209,6 +233,11 @@ export type Provider = RedirectProvider | ArtifactProvider;
 /** Only an artifact provider is holder-paced, and only it needs a url handed back. */
 export function isArtifactProvider(provider: Provider): provider is ArtifactProvider {
   return 'verify' in provider;
+}
+
+/** How a provider shows control. A redirect provider that names none is oauth. */
+export function providerMethod(provider: Provider): Method {
+  return provider.method ?? 'oauth';
 }
 
 export interface Evidence {
@@ -252,19 +281,25 @@ export function status(connection: Connection, now: number, freshness = freshnes
 
   if (now >= connection.expiresAt) return 'expired';
 
-  // A sign-in happened once and stays happened. A proof that has not been read lately is
-  // unconfirmed rather than disproved, which is why this reverses the moment it reads again.
   const external = connection.attestations?.external;
 
-  if (
-    external?.artifactUrl &&
-    !external.hosted &&
-    freshness !== Infinity &&
-    now >= external.confirmedAt + freshness
-  )
-    return 'expired';
+  if (external && !fresh(external, now, freshness)) return 'expired';
 
   return 'verified';
+}
+
+/**
+ * Whether one method still counts. A sign-in happened once and stays happened. A proof
+ * that has not been read lately is unconfirmed rather than disproved, which is why this
+ * reverses the moment it reads again.
+ */
+export function fresh(attestation: Attestation, now: number, freshness = freshnessMs): boolean {
+  return (
+    !attestation.artifactUrl ||
+    attestation.hosted === true ||
+    freshness === Infinity ||
+    now < attestation.confirmedAt + freshness
+  );
 }
 
 /**
@@ -304,10 +339,14 @@ export function localSide(
 /**
  * How to write an external subject's name. The @ that marks a handle is a claim that there
  * is an account behind it, issued by somebody who could also take it away. A key has no
- * account and no handle: it is named by its own fingerprint, so it is written as it is.
+ * account and no handle: it is named by its own fingerprint, so it is written as it is. A
+ * page is named by its address for the same reason, since fetching one says where it is
+ * and never who holds it.
  */
 export function externalName(external: ExternalAccount): string {
-  return external.kind === 'key' ? external.handle : `@${external.handle.replace(/^@/, '')}`;
+  return external.kind === undefined || external.kind === 'account'
+    ? `@${external.handle.replace(/^@/, '')}`
+    : external.handle;
 }
 
 /**
@@ -326,6 +365,7 @@ export function attestationLabel(
     declared: `Stated by ${names.site}`,
     oauth: `Signed in with ${names.provider}`,
     attestation: `Published a proof on ${names.provider}`,
+    backlink: `Linked back to ${names.site}`,
     dns: 'Proved with a DNS record',
     wellknown: 'Proved with a file on the domain',
     signature: 'Proved with a signature',

@@ -311,6 +311,71 @@ test('a holder-paced proof is published here, submitted here, and approved here'
   assert.ok(page.includes(url));
 });
 
+test('several methods are offered one by one, and a second one joins the record', async () => {
+  const oauth = fakeProvider();
+  const notes = { ...fakeArtifactProvider(), id: 'github', name: 'GitHub' };
+  const f = fixture([oauth, notes]);
+
+  const choice = await (
+    await f.request('/verify?provider=github', { headers: { cookie: 'local=alice' } })
+  ).text();
+
+  assert.match(choice, /Sign in with GitHub/);
+  assert.match(choice, /Publish a proof on GitHub/);
+  assert.match(choice, /name="method" value="attestation"/);
+
+  const id = await f.connect('public');
+
+  // The same account, shown the other way.
+  const start = await f.request('/sessions?kind=connect&provider=github&method=attestation', {
+    headers: { cookie: 'local=alice' },
+  });
+
+  const cookie = start.headers.get('set-cookie')!.split(';')[0]!;
+  const path = start.headers.get('location')!.replace('/api/verity', '');
+
+  const waiting = await (
+    await f.request(path, { headers: { cookie: `${cookie}; local=alice` } })
+  ).text();
+
+  const url = 'https://notes.test/alice/1';
+
+  notes.artifacts.set(url, waiting.match(/<code>([^<]+)<\/code>/)![1]!);
+
+  await f.request(`${path}/submit`, {
+    method: 'POST',
+    headers: {
+      origin: 'https://site.test',
+      cookie: `${cookie}; local=alice`,
+      'content-type': 'application/x-www-form-urlencoded',
+    },
+    body: `artifact=${encodeURIComponent(url)}`,
+  });
+
+  const review = await (
+    await f.request(path, { headers: { cookie: `${cookie}; local=alice` } })
+  ).text();
+
+  assert.match(review, /Add to connection/);
+  assert.match(review, /stays public/);
+  assert.ok(!review.includes('value="unlisted" checked'));
+
+  await f.request(`${path}/approve`, {
+    method: 'POST',
+    headers: { origin: 'https://site.test', cookie: `${cookie}; local=alice` },
+    body: 'visibility=unlisted&action=approve',
+  });
+
+  const page = await (await f.request(`/connections/${id}`)).text();
+
+  assert.match(
+    page,
+    /Signed in with GitHub<\/p><p class="how further">\+ Published a proof on GitHub · <a/,
+  );
+
+  assert.equal((await f.app.service.mine(alice)).length, 1);
+});
+
 test('a proof handed over is taken as text, published here, and served as text', async () => {
   const provider = fakeDocumentProvider();
   const f = fixture(provider);

@@ -389,3 +389,55 @@ test('a keyserver answer settles it, and an unaskable address is never fetched',
   assert.equal(minted.calls.length, 3);
   assert.ok(minted.calls.every((url) => url.startsWith('https://')));
 });
+
+test('a directory named by a stranger is never read through the unguarded fetch', async (t) => {
+  const calls: string[] = [];
+
+  t.mock.method(globalThis, 'fetch', async (input: string | URL) => {
+    calls.push(String(input));
+
+    return new Response('not found', { status: 404 });
+  });
+
+  const account = await pgpProvider().verify({
+    artifact: await pasted('ed25519.pub.asc', 'ed25519.sig.asc'),
+    expect,
+  });
+
+  // The keyserver is the operator's and goes through fetch; the directory's host is not,
+  // and goes through the transport that checks where it resolves.
+  assert.deepEqual(calls, [at(ed25519)]);
+  assert.equal(account.id, ed25519);
+});
+
+test('a body is read only as far as a key could need, and every one is let go of', async () => {
+  let opened = 0;
+  let cancelled = 0;
+
+  // Every answer is a body that never ends: an error from the keyserver, a refusal from
+  // one directory location and an endless "key" from the other. Reading any of them to
+  // the end would never return.
+  const replies: Record<string, number> = { [at(ed25519)]: 503, [wkd[0]!]: 404, [wkd[1]!]: 200 };
+
+  const endless = (async (input: string | URL) => {
+    opened += 1;
+
+    const body = new ReadableStream<Uint8Array>({
+      pull: (controller) => controller.enqueue(new Uint8Array(4096)),
+      cancel: () => {
+        cancelled += 1;
+      },
+    });
+
+    return new Response(body, { status: replies[String(input)] ?? 404 });
+  }) as unknown as typeof fetch;
+
+  const account = await pgpProvider({ fetch: endless }).verify({
+    artifact: await pasted('ed25519.pub.asc', 'ed25519.sig.asc'),
+    expect,
+  });
+
+  assert.equal(account.id, ed25519);
+  assert.equal(opened, 3);
+  assert.equal(cancelled, 3);
+});

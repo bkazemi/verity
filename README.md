@@ -14,7 +14,7 @@ Open http://localhost:3001 to see the actual styled badge on a JoeSite profile, 
 
 ## Run the example
 
-Requires Node.js 22+, npm, Postgres, and a GitHub.com OAuth app.
+Requires Node.js 22.13+ or 24+, npm, Postgres, and a GitHub.com OAuth app.
 
 ```sh
 npm ci
@@ -96,7 +96,8 @@ const verity = createVerity({
     };
   },
 });
-// `githubGistProvider()` and `pgpProvider()` are the alternatives; see Proof methods below.
+// `githubGistProvider()`, `linkProvider()` and `pgpProvider()` are the alternatives,
+// and `provider` also takes several at once; see Proof methods below.
 // Your router calls verity.handle(Request), or mounts this Node callback:
 const handler = nodeHandler(verity.handle, 'https://community.example');
 ```
@@ -152,13 +153,15 @@ Visitors can inspect the evidence in the pill's modal or follow its evidence lin
 
 A provider answers _whose_ an account is; a method answers _how_ control of it was shown. The two multiply rather than enumerate, and none of them is ranked above the others: which proof convinces is the reader's call, which is the reason for publishing one instead of issuing a verdict.
 
-| Provider               | How the holder proves it                                                                           | Needs                                          |
-| ---------------------- | -------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| `githubProvider()`     | Signs in through GitHub and comes back.                                                            | An OAuth app, a client id and a client secret. |
-| `githubGistProvider()` | Publishes a public gist containing a per-flow line, and hands back its address.                    | Nothing.                                       |
-| `pgpProvider()`        | Signs a per-flow line with an OpenPGP key, and hands back the signed message and their public key. | Nothing.                                       |
+| Provider               | How the holder proves it                                                                                  | Needs                                          |
+| ---------------------- | --------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| `githubProvider()`     | Signs in through GitHub and comes back.                                                                   | An OAuth app, a client id and a client secret. |
+| `githubGistProvider()` | Publishes a public gist containing a per-flow line, and hands back its address.                           | Nothing.                                       |
+| `linkProvider()`       | Puts a `rel="me"` link to their local subject on a page they control, and hands back that page's address. | Nothing.                                       |
+| `githubLinkProvider()` | The same, on their GitHub profile, whose website field GitHub already marks `rel="me"`.                   | Nothing.                                       |
+| `pgpProvider()`        | Signs a per-flow line with an OpenPGP key, and hands back the signed message and their public key.        | Nothing.                                       |
 
-The last two are holder-paced: the flow stays on your origin while the holder goes away and publishes, instead of being one redirect. They differ in who keeps the proof, which is what `ArtifactProvider.artifact` says:
+All but the first are holder-paced: the flow stays on your origin while the holder goes away and publishes, instead of being one redirect. They differ in who keeps the proof, which is what `ArtifactProvider.artifact` says:
 
 - **`location`** — the holder publishes the proof somewhere only they can write and hands back an address. The address is half of what is proved, so the provider must refuse any address outside itself; an unpinned fetch is an open proxy. The proof can later be deleted, so it is reread on a schedule.
 - **`document`** — the holder hands over the proof itself and Verity publishes it at `<baseUrl>/connections/<id>/proof`, as `text/plain` a reader can drop straight into their own tools. Nothing is fetched to establish it.
@@ -167,13 +170,74 @@ The last two are holder-paced: the flow stays on your origin while the holder go
 
 A key is shown by the address on it, because that is what a reader recognises — forty hex digits are not. But an address is shown **only where two parties who cannot stand in for each other have both said it**: the key signed for it, and somebody who is not its holder publishes it.
 
-There are two sources for the second half. A keyserver that confirms addresses, and the mailbox's own domain: if `example.com` publishes the key at the [web key directory](https://datatracker.ietf.org/doc/draft-koch-openpgp-webkey-service/) location derived from `alice@example.com`, that is the domain owning the mailbox saying the two belong together — a better answer than a third party's, and the one that covers keys uploaded nowhere. The keyserver is asked first because it is a single request; the directory's two locations follow.
+There are two sources for the second half. A keyserver that confirms addresses, and the mailbox's own domain: if `example.com` publishes the key at the [web key directory](https://datatracker.ietf.org/doc/draft-koch-openpgp-webkey-service/) location derived from `alice@example.com`, that is the domain owning the mailbox saying the two belong together — a better answer than a third party's, and the one that covers keys uploaded nowhere. The keyserver is asked first because it is a single request; the directory's two locations follow. The directory's host comes off a stranger's key, so it is read through the same transport as a backlink: every address the name resolves to must be public, checked on the connection itself. That needs Node; elsewhere the directory is skipped and the key shows as its fingerprint unless the keyserver confirms an address.
 
 Either one alone is worth nothing. Minting a key that self-certifies `<support@bank.example>` takes seconds, so an address on a key is only the key's word for itself, and printing it beside a real proof would read as established when nobody established anything. A keyserver saying it alone is no better, because Verity does not take the keyserver's word either: the served packets are checked against the key it already holds, so the keyserver is a courier that can stay silent but cannot put an address on a key or take one off. Anywhere no address is confirmed — not uploaded, keyserver down, keyserver lying — the fingerprint's short form stands in, and the proof itself is unaffected, because the proof never depended on a keyserver.
 
 The fingerprint is always carried beside the address, since a confirmation says only that somebody could read that mailbox on the day they confirmed it, while the fingerprint is the part nobody can claim their way into. A holder who wants their address shown is told so in the flow's instructions: publish the key and confirm the address first.
 
 The OpenPGP reader is written out rather than depended on, because a library arguing that you can check its claims should not first ask you to accept a megabyte of somebody else's cryptography. It parses armor, public-key and signature packets, and the cleartext framework, and verifies Ed25519, ECDSA and RSA through WebCrypto. It rejects SHA-1 signatures. A signing subkey counts, but only where the primary key signed a binding for it — otherwise anyone could staple their own subkey to a published key and sign as its holder.
+
+### A link back
+
+`linkProvider()` proves a link by reading one back. The holder puts an ordinary `rel="me"` link to their exact local subject on a page only they can write, hands back that page's address, and Verity reads the page and checks the link is there.
+
+Usually they have already done it without being asked. GitHub marks a profile's website field `rel="me"`, and Mastodon does the same for its profile links, so anybody who filled that field in is published already:
+
+```html
+<a rel="nofollow me" class="Link--primary wb-break-all" href="https://shirkadeh.org"></a>
+```
+
+`rel="me"` says the thing at the other end of the link is also me. It is an [XFN](https://gmpg.org/xfn/) relation, and it is what IndieAuth and Mastodon's own profile verification run on. One such link proves nothing by itself — anyone can write one pointing anywhere — and it is the **pair** that proves something: two addresses agreeing they are the same party, each writable only by whoever holds it. Verity already has the other half, because a site declaring its own subject is the `declared` attestation on every link it makes, so only the far side is ever fetched.
+
+Two things follow, and both depart from the other holder-paced methods.
+
+**The proof is not a per-flow token.** Every other artifact method has Verity mint an unguessable line for the holder to publish, which is what stops an artifact made for one flow completing another. A backlink has no room for one: the claim _is_ the subject's address, and nobody is going to leave `?verity=…` in their GitHub website field forever. So `ArtifactProvider.expect()` lets a provider state what must be published instead, and this one returns the local subject's `profileUrl` — meaning a subject without one cannot be proved this way at all, and starting such a flow fails loudly. Uniqueness is traded for a standing link, and freshness comes from reading it again: `recheck()` does that on its usual schedule, and a link taken down stops confirming.
+
+**What is proved is a page, not an account** — unless you have said whose namespace it is in. No provider was asked who holds the address; a document was fetched from it. So by default the external side comes back with `kind: 'page'`, named by its address, because a handle is a claim that somebody issued an account and reading a page never establishes one. The address is kept exactly as it was read, trailing slash included, since `/foo/` and `/foo` can be different resources on an arbitrary host.
+
+A deployment that has named the host can say more, because the namespace is then known: pass `profile` and a path of the right shape is an account in it, written `@bkazemi` as a reader would know it. That option requires `hosts`, since a handle means nothing without the namespace it belongs to, and an instance reading any host is in no position to award one.
+
+The holder chooses the address, so an unguarded fetch here would be an open proxy. Reads are HTTPS on the default port, never an address literal, never followed through a redirect, and bounded in both time and bytes, counted after a gzip, deflate or Brotli body is decompressed — a page too large to finish reading reports that it could not be read, rather than that the link is absent. Without `hosts`, every address the name resolves to must be on the public internet, and that is checked in the connection's own lookup, so the socket connects to the address that passed and a DNS answer cannot change between the check and the fetch. That needs Node; elsewhere, such as on Cloudflare Workers, `linkProvider()` refuses to start without `hosts`. Passing `fetch` replaces the transport and this check with it, so pass one only where it keeps requests out of your network itself.
+
+Only a response served as `text/html` has its body read, since a browser shows anything else as text, where markup is an example of a link rather than one. XHTML is refused too: it is XML, where namespaces decide what an element is, and an HTML parser would misread it. The page is decoded in the encoding a browser would use — a byte order mark, then the response's `charset`, then a `<meta>` near the top — and parsed as a browser would parse it, and only real `<a>` and `<link>` elements count: markup inside a comment, a script, an attribute value, a `<textarea>` or `<title>`, or a `<template>` is text, not a link. Relative links resolve against the page's `<base href>` where it has one. On a page too large to read whole, a relative link found before any `<base>` does not count, since the unread rest could still declare one that sends it elsewhere. `rel` is matched as a token, split on ASCII whitespace as HTML splits it, so `theme` is not `me` and neither is `nofollow&nbsp;me`. A `Link:` response header carrying the relation counts too, whatever the page's type, and resolves against the page's address. The header is parsed by its grammar, so `rel=me` inside a quoted parameter such as a `title` is not a relation, and a link whose `anchor` names another resource is not one of this page's.
+
+A link matches the subject by scheme, host, path and the subject's query parameters. Where the subject's `profileUrl` has a fragment, as hash-routed apps give their profiles (`https://site.example/#/users/alice`), the fragment names the subject and must match exactly; otherwise a fragment on the link is ignored.
+
+Unlike the other `location` providers, this one is not pinned to a single host by default — the fediverse has no fixed host and neither does somebody's own domain, and pinning would narrow a method meant for any site to one. Pass `hosts` where a deployment wants a narrower fetcher than the guards alone give it:
+
+```ts
+linkProvider({ name: 'a page of your own' }); // Any public host, named by address.
+githubLinkProvider(); // github.com only, named @handle.
+
+// What the preset configures, for any other host whose namespace you know:
+linkProvider({
+  id: 'github',
+  name: 'GitHub',
+  hosts: ['github.com'],
+  profile: /^\/([A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38})$/,
+});
+```
+
+The preset takes the id `github`, the same one `githubProvider()` and `githubGistProvider()` use, because the id names whose namespace the account is in and the method says how it was shown. That also gives it the GitHub mark on the badge with no further wiring.
+
+What it does **not** give is a shared external id. A sign-in learns the number GitHub issued; a backlink only ever learns an address, and it uses the address as the id. Where the two meet on one record, they are matched by profile address instead — see below.
+
+A link back is public and standing, so handing one back shows only that it exists. It can therefore never remove a connection from the external side: that takes a method whose proof the holder makes fresh.
+
+### Several methods at once
+
+`provider` takes an array. Methods sharing an id are ways of showing one account, and the verify page offers each as its own button:
+
+```ts
+provider: [githubProvider({ clientId, clientSecret }), githubLinkProvider()],
+```
+
+A record keeps the method it was first shown by as its main one. Showing the same account another way — by connecting again with a different method, or renewing with one — adds that method beneath the main one instead of making a second record, and the evidence page and dialog list it there (`+ Linked back to …`). Each method's proof is reread on its own; one that goes unread drops off the record until it reads again, and only the main one decides the record's status.
+
+Two methods agree on an account when their provider-issued ids match. A method that learns only an address, such as a link back, is matched by profile address instead, without case. That is the weaker test, and it applies only to flows the local holder starts and approves: removing a connection or its sharing link from the external side takes a matching provider-issued id, so whoever holds a username next cannot remove the record the last holder's link back proved.
+
+A proof that names the subject, as a link back names its address, proves the subject at that address only. If the site later gives the subject a new `profileUrl`, a record first shown by such a proof is not joined by a flow for the new address, and further proofs naming the old address are dropped when a record is joined.
 
 ## Contract and operations
 

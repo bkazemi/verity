@@ -713,6 +713,55 @@ test('an account still reads as a handle, and its provider mark is still drawn',
   assert.equal(heading.find('svg').length, 1);
 });
 
+test('further methods sit beneath the main one, each with its own proof', async () => {
+  const { cards } = await renderDialog({
+    local: { by: 'backend', method: 'declared', confirmedAt: 1 },
+    external: { by: 'provider', method: 'oauth', confirmedAt: 2 },
+    further: [
+      {
+        by: 'provider',
+        method: 'backlink',
+        artifactUrl: 'https://github.com/alice',
+        confirmedAt: 3,
+      },
+    ],
+  });
+
+  const text = cards[1]!.textContent;
+
+  assert.match(text, /Signed in with GitHub\+ Linked back to site\.test · View the proof/);
+
+  // The method is named in words, never by the markup it happens to use.
+  assert.ok(!text.includes('rel='));
+});
+
+test('a page read by a link back is a record the badge will show', async () => {
+  const { cards } = await renderDialog(
+    {
+      local: { by: 'backend', method: 'declared', confirmedAt: 1 },
+      external: {
+        by: 'provider',
+        method: 'backlink',
+        artifactUrl: 'https://example.test/about',
+        confirmedAt: 2,
+      },
+    },
+    {
+      provider: 'link',
+      providerName: 'Web',
+      external: {
+        id: 'https://example.test/about',
+        kind: 'page',
+        handle: 'example.test/about',
+        profileUrl: 'https://example.test/about',
+      },
+    },
+  );
+
+  assert.match(cards[1]!.textContent, /example\.test\/about/);
+  assert.ok(!cards[1]!.textContent.includes('@example'));
+});
+
 test('the version stamped on a record is the one the package ships', async () => {
   const { version } = await import('../src/version.js');
   const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
