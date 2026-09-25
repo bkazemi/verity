@@ -18,6 +18,8 @@
   "main": "cloudflare/worker.ts",
   "compatibility_date": "2026-07-01",
   "compatibility_flags": ["nodejs_compat"],
+  // publicFetch() loads undici only on Node, so it has no place in the Worker.
+  "alias": { "undici": "./cloudflare/undici.ts" },
 
   // Serve the backend from a host a reader can tie to the site making the
   // claim. Keep workers_dev true until the custom domain answers, then set it

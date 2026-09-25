@@ -21,6 +21,7 @@ test('Cloudflare SQLite transactions, persistent owner sessions, OAuth, public e
     // What wrangler resolves a package by, where one ships no `exports` of its own.
     mainFields: ['module', 'main'],
     external: ['node:*'],
+    alias: { undici: './cloudflare/undici.ts' },
     outfile: scriptPath,
   });
 

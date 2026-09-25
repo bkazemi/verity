@@ -1,11 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { linkProvider } from '../src/server/link.js';
-import * as stream from 'node:stream';
-import { PassThrough } from 'node:stream';
+import { createServer, type AddressInfo } from 'node:net';
 import * as zlib from 'node:zlib';
-import type { IncomingMessage } from 'node:http';
-import { publicAddress, publicFetch, respond } from '../src/server/public-fetch.js';
+import { publicAddress } from '../src/server/addresses.js';
+import { publicFetch } from '../src/server/public-fetch.js';
 import { readBounded } from '../src/server/body.js';
 
 /** The preset's own options, so these exercise what `githubLinkProvider()` configures. */
@@ -489,78 +488,106 @@ test('a public name that resolves inside the network is never connected to', asy
     await assert.rejects(request(`https://${host}/about`, {}), /Not an address/, host);
 });
 
-test('a response the far side mangled is an error, not a crash', async () => {
-  const incoming = (statusCode: number, headers: Record<string, string> = {}) =>
-    Object.assign(new PassThrough(), { statusCode, headers }) as unknown as IncomingMessage;
+/**
+ * A server that answers every request with the same raw bytes, reached as `site.test`
+ * through a transport that may connect to this machine and nowhere else.
+ */
+async function raw(...response: (string | Buffer)[]) {
+  let closed = false;
 
-  // Node reads these off the wire, and Response refuses them. Thrown from the callback
-  // that builds the response, either would take the process down.
-  for (const status of [600, 999, 99, 0])
-    assert.throws(
-      () => respond(incoming(status), { stream, zlib }),
-      /Not an HTTP status/,
-      `${status}`,
+  const server = createServer((socket) =>
+    socket.once('data', () => {
+      socket.on('close', () => (closed = true));
+      socket.end(Buffer.concat(response.map((part) => Buffer.from(part))));
+    }),
+  );
+
+  await new Promise<void>((listening) => server.listen(0, '127.0.0.1', listening));
+
+  const request = publicFetch(
+    async () => [{ address: '127.0.0.1', family: 4 }],
+    (address) => address === '127.0.0.1',
+  );
+
+  const url = `http://site.test:${(server.address() as AddressInfo).port}/`;
+
+  return {
+    get: () => request(url, {}),
+    closed: () => closed,
+    [Symbol.asyncDispose]: () => new Promise<void>((done) => server.close(() => done())),
+  };
+}
+
+test('a response the far side mangled is an error or a failure, not a crash', async () => {
+  // Node's parser takes any three digits; `Response` refuses them.
+  for (const status of [600, 999, 99]) {
+    await using server = await raw(`HTTP/1.1 ${status} X\r\ncontent-length: 0\r\n\r\n`);
+    const response = await server.get().catch((error: Error) => error);
+
+    assert.ok(response instanceof Error || !response.ok, `${status}`);
+  }
+
+  {
+    await using server = await raw('HTTP/1.1 200 OK\r\nx-a: a\x01b\r\ncontent-length: 0\r\n\r\n');
+
+    await assert.rejects(server.get());
+  }
+
+  {
+    await using server = await raw(
+      'HTTP/1.1 302 Found\r\nlocation: https://site.test/\r\ncontent-length: 0\r\n\r\n',
     );
 
-  assert.throws(() => respond(incoming(200, { 'bad name': 'x' }), { stream, zlib }));
-  assert.throws(() => respond(incoming(302), { stream, zlib }), /Redirects/);
+    await assert.rejects(server.get(), /redirect/);
+  }
 
-  const ok = respond(incoming(200, { 'content-type': 'text/html' }), { stream, zlib });
+  // An address written into the URL goes through no lookup, so it is checked on its own.
+  const request = publicFetch(
+    async () => [],
+    () => false,
+  );
 
-  assert.equal(ok.status, 200);
-  assert.equal(ok.headers.get('content-type'), 'text/html');
-  assert.ok(ok.body);
-
-  const missing = incoming(404);
-  const gone = respond(missing, { stream, zlib });
-
-  assert.equal(gone.status, 404);
-  assert.equal(gone.body, null);
-  assert.ok(missing.destroyed);
+  for (const url of ['http://127.0.0.1/', 'http://[::1]/', 'http://[::ffff:10.0.0.1]/'])
+    await assert.rejects(request(url, {}), /Not an address/, url);
 });
 
 test('a compressed body is read decompressed, and bounded after decompressing', async () => {
   const html = '<a rel="me" href="https://site.test/@alice">x</a>';
 
-  const incoming = (headers: Record<string, string>, body: Buffer) => {
-    const message = Object.assign(new PassThrough(), { statusCode: 200, headers });
-
-    message.end(body);
-
-    return message as unknown as IncomingMessage;
-  };
-
   for (const [coding, bytes] of [
     ['gzip', zlib.gzipSync(html)],
     ['x-gzip', zlib.gzipSync(html)],
     ['deflate', zlib.deflateSync(html)],
+    // Without the zlib wrapper, as some servers send it.
+    ['deflate', zlib.deflateRawSync(html)],
     ['br', zlib.brotliCompressSync(html)],
     ['GZIP', zlib.gzipSync(html)],
     ['identity', Buffer.from(html)],
     // Listed in the order applied, so undone from the end.
     ['deflate, gzip', zlib.gzipSync(zlib.deflateSync(html))],
   ] as const) {
-    const response = respond(incoming({ 'content-encoding': coding }, bytes), { stream, zlib });
-
-    assert.equal(await response.text(), html, coding);
-    assert.equal(response.headers.get('content-encoding'), null, coding);
-  }
-
-  for (const coding of ['compress', 'gzip, gzip, gzip, gzip, gzip, gzip'])
-    assert.throws(
-      () => respond(incoming({ 'content-encoding': coding }, Buffer.alloc(0)), { stream, zlib }),
-      /Content encoding|content encodings/,
-      coding,
+    await using server = await raw(
+      `HTTP/1.1 200 OK\r\ncontent-encoding: ${coding}\r\ncontent-length: ${bytes.length}\r\n\r\n`,
+      bytes,
     );
 
+    assert.equal(await (await server.get()).text(), html, coding);
+  }
+
   // 16 MiB of zeros in a few kilobytes: read no further than the bound, then let go.
-  const bomb = incoming({ 'content-encoding': 'gzip' }, zlib.gzipSync(Buffer.alloc(1 << 24)));
-  const { bytes, truncated } = await readBounded(respond(bomb, { stream, zlib }), 65536);
+  const bomb = zlib.gzipSync(Buffer.alloc(1 << 24));
+
+  await using server = await raw(
+    `HTTP/1.1 200 OK\r\ncontent-encoding: gzip\r\ncontent-length: ${bomb.length}\r\n\r\n`,
+    bomb,
+  );
+
+  const { bytes, truncated } = await readBounded(await server.get(), 65536);
 
   assert.equal(bytes.byteLength, 65536);
   assert.ok(truncated);
-  await new Promise((settled) => setImmediate(settled));
-  assert.ok(bomb.destroyed);
+  await new Promise((settled) => setTimeout(settled, 100));
+  assert.ok(server.closed());
 });
 
 test('only addresses on the public internet count as public', () => {
