@@ -1,8 +1,8 @@
 # Verity V0
 
-Standalone, self-hosted account-link verification for Node.js and ordinary HTML sites. Verity authenticates a GitHub account and asks its holder to approve a connection to the exact local account supplied by your application. It does not sign users into your site or establish legal identity.
+Standalone, self-hosted account-link verification for Node.js and ordinary HTML sites. Verity has the holder of an external account prove they control it — by signing in with GitHub, publishing a gist, linking back with `rel="me"` from a page they control, or signing with an OpenPGP key — and then approve a connection to the exact local account supplied by your application. It does not sign users into your site or establish legal identity.
 
-Includes a TypeScript server, a framework-free browser component, transactional Postgres adapter, public/unlisted evidence, sharing-link rotation, local and external revocation, and a runnable generic example. No Veracity service or account is needed. MIT licensed; package names are provisional and publication is disabled.
+Includes a TypeScript server, a framework-free browser component, transactional Postgres adapter, public/unlisted evidence, sharing-link rotation, local and external revocation, and a runnable generic example. No Veracity service or account is needed. MIT licensed. [OpenPGP.js](https://github.com/openpgpjs/openpgpjs), which `pgpProvider()` uses to read keys and signatures, is LGPL-3.0-or-later. Package names are provisional and publication is disabled.
 
 ## Preview the default badge
 
@@ -278,6 +278,6 @@ TEST_DATABASE_URL=postgres://verity:verity@localhost:5432/verity npm test
 npm run test:consumer
 ```
 
-The Postgres test is explicitly skipped unless `TEST_DATABASE_URL` is supplied. It uses isolated namespaces and removes its records. The other tests use a deterministic test-only provider and transaction adapter; they do not establish successful live GitHub integration. `test:consumer` packs and installs into a temporary separate consumer, checks Node and browser imports and TypeScript declarations, verifies the browser bundle excludes server/database modules, and executes the distributed browser script without server globals.
+The Postgres and runnable-example tests are skipped unless `TEST_DATABASE_URL` is supplied. They use isolated namespaces and schemas and remove what they create. CI runs all of it, Postgres included, on Node 22.13, 24 and 26. The other tests use a deterministic test-only provider and transaction adapter; they do not establish successful live GitHub integration. `test:consumer` packs and installs into a temporary separate consumer, checks Node and browser imports and TypeScript declarations, verifies the browser bundle excludes server/database modules, and executes the distributed browser script without server globals.
 
 Live OAuth acceptance still requires an operator with GitHub app credentials to drive the flow against the real provider by hand. Provider access is an integration prerequisite; no credentials ship in this repository.
