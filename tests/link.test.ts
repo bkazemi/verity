@@ -58,7 +58,17 @@ test('a rel="me" link to the subject proves the page that carries it', async () 
 
   assert.equal(calls[0]!.url, page);
   // The holder names the address, so a redirect would take the check somewhere else.
-  assert.equal(calls[0]!.init?.redirect, 'error');
+  // Workers refuse 'error', so a redirect must come back as a response to be refused.
+  assert.equal(calls[0]!.init?.redirect, 'manual');
+});
+
+test('a page that redirects proves nothing, wherever it points', async () => {
+  const { instance } = provider(`<a rel="me" href="${expect}">me</a>`, {
+    status: 301,
+    headers: { location: 'https://example.test/elsewhere' },
+  });
+
+  await assert.rejects(instance.verify({ artifact: page, expect }), /redirect/);
 });
 
 test("GitHub's own profile markup proves the account", async () => {

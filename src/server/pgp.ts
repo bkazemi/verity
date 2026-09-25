@@ -66,7 +66,8 @@ export function pgpProvider(
       new URL(`/vks/v1/by-fingerprint/${fingerprint(held)}`, keyserver).href,
       {
         headers: { Accept: 'application/pgp-keys' },
-        redirect: 'error',
+        // Workers refuse 'error'. A redirect comes back as a response that is not ok.
+        redirect: 'manual',
         signal: AbortSignal.timeout(15000),
       },
     );
@@ -102,7 +103,7 @@ export function pgpProvider(
 
     const response = await directory(url, {
       headers: { Accept: 'application/octet-stream' },
-      redirect: 'error',
+      redirect: 'manual',
       signal: AbortSignal.timeout(10000),
     });
 

@@ -117,7 +117,8 @@ export function linkProvider(options: LinkProviderOptions): ArtifactProvider {
       const subject = new URL(expect);
 
       const response = await request(page.href, {
-        redirect: 'error',
+        // Workers refuse 'error', so a redirect comes back as a response and is refused below.
+        redirect: 'manual',
         headers: { Accept: 'text/html, */*;q=0.1', 'User-Agent': 'Verity-V0' },
         signal: AbortSignal.timeout(options.timeoutMs ?? 15000),
       });
@@ -145,6 +146,10 @@ async function backlinked(
   subject: URL,
   maxBytes: number,
 ): Promise<void> {
+  // The holder named this address, so a redirect would take the check somewhere else.
+  if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400))
+    throw new Error('Page redirects, and a redirect is not followed');
+
   if (!response.ok) throw new Error('Page unavailable');
 
   // A link relation is a link relation wherever it is declared, and a page with no
