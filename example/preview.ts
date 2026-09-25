@@ -1,10 +1,10 @@
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
-import type { Evidence } from 'verity';
+import type { Evidence } from '@bkazemi/verity';
 
 const require = createRequire(import.meta.url);
-const asset = await readFile(require.resolve('verity/verity.js'));
+const asset = await readFile(require.resolve('@bkazemi/verity/verity.js'));
 const page = await readFile(new URL('./preview.html', import.meta.url));
 const port = Number(process.env.PREVIEW_PORT ?? 3001);
 const origin = `http://localhost:${port}`;

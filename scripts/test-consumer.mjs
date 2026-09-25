@@ -32,19 +32,19 @@ try {
     `
     import assert from 'node:assert/strict';
     import { createRequire } from 'node:module';
-    import { createVerity, githubProvider, githubLinkProvider, linkProvider, PostgresStorage, status, init } from 'verity';
+    import { createVerity, githubProvider, githubLinkProvider, linkProvider, PostgresStorage, status, init } from '@bkazemi/verity';
     assert.equal(typeof createVerity, 'function'); assert.equal(typeof githubProvider, 'function');
     assert.equal(typeof linkProvider, 'function');
     assert.equal(githubLinkProvider().id, 'github');
     assert.equal(typeof PostgresStorage, 'function'); assert.equal(typeof status, 'function'); assert.equal(typeof init, 'function');
-    console.log(createRequire(import.meta.url).resolve('verity/verity.js'));
+    console.log(createRequire(import.meta.url).resolve('@bkazemi/verity/verity.js'));
   `,
   );
 
   writeFileSync(
     join(directory, 'consumer.ts'),
     `
-    import { createVerity, PostgresStorage, Pool, init, type ServerOptions, type Evidence, type Storage } from 'verity';
+    import { createVerity, PostgresStorage, Pool, init, type ServerOptions, type Evidence, type Storage } from '@bkazemi/verity';
     const storage: Storage = new PostgresStorage(new Pool());
     const create: (options: ServerOptions) => ReturnType<typeof createVerity> = createVerity;
     const client = init({ backendUrl: '/api/verity' });
@@ -73,12 +73,12 @@ try {
   writeFileSync(
     join(directory, 'browser.ts'),
     `
-    import { init, type Evidence } from 'verity';
+    import { init, type Evidence } from '@bkazemi/verity';
     const client = init({ backendUrl: '/api/verity' });
     const evidence: Promise<Evidence> = client.getConnection('example');
     void evidence;
     // @ts-expect-error Server APIs must not be offered by the browser entry point.
-    import { createVerity } from 'verity';
+    import { createVerity } from '@bkazemi/verity';
   `,
   );
 
@@ -101,7 +101,7 @@ try {
     { cwd: directory, stdio: 'pipe' },
   );
 
-  writeFileSync(join(directory, 'browser.mjs'), `export { init } from 'verity';`);
+  writeFileSync(join(directory, 'browser.mjs'), `export { init } from '@bkazemi/verity';`);
 
   const browserBundle = await build({
     absWorkingDir: directory,

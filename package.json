@@ -1,10 +1,17 @@
 {
-  "name": "verity",
+  "name": "@bkazemi/verity",
   "version": "0.0.1",
-  "private": true,
   "description": "Self-hosted account-to-account verification for Node.js",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bkazemi/verity.git"
+  },
+  "homepage": "https://github.com/bkazemi/verity#readme",
+  "bugs": {
+    "url": "https://github.com/bkazemi/verity/issues"
+  },
   "engines": {
     "node": "^22.13.0 || >=24"
   },
@@ -49,9 +56,7 @@
   },
   "files": [
     "dist",
-    "README.md",
-    "LICENSE",
-    "docs"
+    "docs/licenses"
   ],
   "exports": {
     ".": {

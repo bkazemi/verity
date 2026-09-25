@@ -9,7 +9,7 @@ import {
   Pool,
   PostgresStorage,
   type LocalAccount,
-} from 'verity';
+} from '@bkazemi/verity';
 
 const origin = process.env.ORIGIN ?? 'http://localhost:3000';
 const password = process.env.EXAMPLE_PASSWORD;
@@ -70,7 +70,7 @@ const maintenance = setInterval(() => {
 
 maintenance.unref();
 const require = createRequire(import.meta.url);
-const asset = await readFile(require.resolve('verity/verity.js'));
+const asset = await readFile(require.resolve('@bkazemi/verity/verity.js'));
 const ui = await readFile(new URL('./ui.js', import.meta.url));
 
 const esc = (s: string) =>
