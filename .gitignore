@@ -6,4 +6,5 @@ dist/
 .dev.vars
 .dev.vars.*
 .env.*
+!.env.example
 wrangler.jsonc
