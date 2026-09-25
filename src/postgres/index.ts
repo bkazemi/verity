@@ -13,10 +13,28 @@ export class PostgresStorage implements Storage {
   }
 
   async migrate(): Promise<void> {
-    await this.pool.query(`CREATE TABLE IF NOT EXISTS verity_records (
-      namespace text NOT NULL, kind text NOT NULL, id text NOT NULL, value jsonb NOT NULL,
-      PRIMARY KEY (namespace, kind, id)
-    )`);
+    const client = await this.pool.connect();
+
+    try {
+      await client.query('BEGIN');
+      // IF NOT EXISTS does not make CREATE TABLE safe to race: two workers starting on a new
+      // database both create the table's row type, and one fails. The table is shared by
+      // every namespace, so the lock is one of its own rather than the namespace's.
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended('verity migrate', 0))");
+
+      await client.query(`CREATE TABLE IF NOT EXISTS verity_records (
+        namespace text NOT NULL, kind text NOT NULL, id text NOT NULL, value jsonb NOT NULL,
+        PRIMARY KEY (namespace, kind, id)
+      )`);
+
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async transaction<T>(work: (tx: Transaction) => Promise<T>): Promise<T> {

@@ -87,3 +87,32 @@ test(
     }
   },
 );
+
+test(
+  'real Postgres: workers starting together on a new database all create the table',
+  { skip: !process.env.TEST_DATABASE_URL },
+  async () => {
+    // A schema of its own, so the table is new here whatever else has run on this database.
+    const schema = `migrate_${randomUUID().replaceAll('-', '')}`,
+      admin = new Pool({ connectionString: process.env.TEST_DATABASE_URL });
+
+    await admin.query(`CREATE SCHEMA ${schema}`);
+
+    const pools = Array.from(
+      { length: 8 },
+      () =>
+        new Pool({
+          connectionString: process.env.TEST_DATABASE_URL,
+          options: `-c search_path=${schema}`,
+        }),
+    );
+
+    try {
+      await Promise.all(pools.map((pool) => new PostgresStorage(pool).migrate()));
+    } finally {
+      await Promise.all(pools.map((pool) => pool.end()));
+      await admin.query(`DROP SCHEMA ${schema} CASCADE`);
+      await admin.end();
+    }
+  },
+);
