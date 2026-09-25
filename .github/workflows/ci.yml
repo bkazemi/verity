@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # The lowest version package.json allows, and the current releases.
+        node: ['22.13.0', '24', '26']
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: verity
+          POSTGRES_PASSWORD: verity
+          POSTGRES_DB: verity
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U verity"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 15
+
+    env:
+      TEST_DATABASE_URL: postgres://verity:verity@localhost:5432/verity
+      WRANGLER_SEND_METRICS: 'false'
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - run: npm ci
+
+      # The example imports the package by name, so its types come from the build.
+      - run: npm run build
+
+      - run: npm run check
+
+      - run: npm run format:check
+
+      - run: npm test
+
+      - run: npm run test:consumer
+
+      # wrangler.jsonc is each deployment's own and is not committed.
+      - run: npx wrangler deploy --dry-run --config wrangler.example.jsonc --outdir .wrangler/build
