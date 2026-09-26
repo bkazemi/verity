@@ -7,7 +7,7 @@ import {
   type Attestation,
   type Evidence,
 } from '../core/index.js';
-import { verificationMark } from './mark.js';
+import { markStyles, verificationMark } from './mark.js';
 import { providerMark } from './provider-mark.js';
 import { verityLogo } from './logo.js';
 import { version } from '../version.js';
@@ -44,6 +44,7 @@ const styles = `
   .explanation { margin-top: 16px; }
   footer { display: flex; align-items: center; justify-content: end; gap: 6px; margin-top: 14px; color: #9aa9a0; font-size: 11px; }
   .logo { display: block; height: 13px; }
+  ${markStyles}
 `;
 
 function node<K extends keyof HTMLElementTagNameMap>(tag: K, text = '', className = '') {

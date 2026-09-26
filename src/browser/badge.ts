@@ -1,5 +1,5 @@
 import { externalName, statusLabel, type Evidence } from '../core/index.js';
-import { paintMark, verificationMark } from './mark.js';
+import { markStyles, paintMark, verificationMark } from './mark.js';
 import { providerMark } from './provider-mark.js';
 
 const styles = `
@@ -38,6 +38,7 @@ const styles = `
     .spinner { border-top-color: transparent; opacity: .4; animation: verity-spin .7s linear infinite; }
   }
   @keyframes verity-spin { to { transform: rotate(360deg); } }
+  ${markStyles}
 `;
 
 /** Built once: a re-render adopts the same sheet rather than reparsing the CSS. */

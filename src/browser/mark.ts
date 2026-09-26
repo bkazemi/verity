@@ -11,11 +11,22 @@ const tones: Record<MarkTone, [string, string]> = {
   pending: ['currentColor', 'currentColor'],
 };
 
+/**
+ * The check draws itself in from its left end once the verification holds: when a pill's
+ * mark first becomes `current`, and each time the dialog opens on a current one.
+ */
+export const markStyles = `
+  @media (prefers-reduced-motion: no-preference) {
+    .mark.current path:last-child { animation: verity-draw .8s cubic-bezier(.65, 0, .35, 1) .1s backwards; }
+  }
+  @keyframes verity-draw { from { stroke-dasharray: 0 176; } to { stroke-dasharray: 108 176; } }
+`;
+
 /** Repaints a mark in place, so answering a check never replaces the drawing. */
 export function paintMark(svg: SVGSVGElement, tone: MarkTone): void {
   const colors = tones[tone];
 
-  svg.setAttribute('class', tone === 'pending' ? 'mark pending' : 'mark');
+  svg.setAttribute('class', `mark ${tone}`);
 
   for (const [layer, path] of [...svg.children].entries())
     path.setAttribute('stroke', colors[layer] ?? colors[0]);

@@ -260,7 +260,7 @@ test('distributed badge renders current/expired/revoked evidence and fails close
   await checking;
   assert.equal(cold.find('a')[0], frame);
   assert.equal(cold.find('svg')[0], mark);
-  assert.equal(mark.attributes['class'], 'mark');
+  assert.equal(mark.attributes['class'], 'mark current');
 
   assert.deepEqual(
     mark.find('path').map((path) => path.attributes['stroke']),
