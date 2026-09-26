@@ -1,4 +1,4 @@
-import type { ArtifactProvider, ExternalAccount } from '../core/index.js';
+import { Refused, type ArtifactProvider, type ExternalAccount } from '../core/index.js';
 import {
   fingerprint,
   identities,
@@ -196,7 +196,7 @@ export function pgpProvider(
       const certificate = await readCertificate(artifact);
       const message = await readCleartext(artifact);
 
-      if (!(await signed(certificate, message))) throw new Error('Signature does not check out');
+      if (!(await signed(certificate, message))) throw new Refused('Signature does not check out');
 
       // The line must stand on its own. A token buried inside a longer sentence was signed
       // too, but it was not necessarily agreed to, and the holder is agreeing to a sentence.
@@ -206,7 +206,7 @@ export function pgpProvider(
           .split('\n')
           .some((line) => line.trim() === expect)
       )
-        throw new Error('Signed message does not contain the line');
+        throw new Refused('Signed message does not contain the line');
 
       return {
         id: fingerprint(certificate),

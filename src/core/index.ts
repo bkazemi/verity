@@ -112,6 +112,8 @@ export interface Flow {
   external?: ExternalAccount;
   authenticatedAt?: number;
   resultId?: string;
+  /** Why a failed flow failed, when a provider said so in words meant for the holder. */
+  reason?: string;
   /**
    * The string an artifact must contain. Public by design: the holder publishes it. It is
    * unguessable and per-flow, so an artifact made for one flow cannot complete another.
@@ -214,7 +216,8 @@ export interface ArtifactProvider {
   /**
    * Reads what the holder handed back and returns whose it is. Must confirm it contains
    * `expect`. A `location` provider must also refuse any address outside itself, since
-   * the holder chooses that address and an unpinned fetch is an open proxy.
+   * the holder chooses that address and an unpinned fetch is an open proxy. Throw `Refused`
+   * to tell the holder why; any other error is shown only as a failure.
    */
   verify(input: { artifact: string; expect: string }): Promise<ExternalAccount>;
   /**
@@ -224,6 +227,12 @@ export interface ArtifactProvider {
    */
   withdrawn?(account: ExternalAccount, artifact: string): Promise<boolean>;
 }
+
+/**
+ * A proof turned down for a reason the holder can act on. Its message is shown to them, so
+ * it names what was wrong with what they handed over and nothing about the backend.
+ */
+export class Refused extends Error {}
 
 /** A piece of what the holder is told: a paragraph, or something they run or publish as is. */
 export type Instruction = string | { code: string };

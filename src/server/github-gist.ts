@@ -1,4 +1,4 @@
-import type { ArtifactProvider, ExternalAccount } from '../core/index.js';
+import { Refused, type ArtifactProvider, type ExternalAccount } from '../core/index.js';
 
 /**
  * Proves control of a GitHub account by having its holder publish a given line in a public
@@ -20,15 +20,15 @@ export function githubGistProvider(options: { fetch?: typeof fetch } = {}): Arti
       { code: expect },
     ],
     async verify({ artifact, expect }): Promise<ExternalAccount> {
-      const url = new URL(artifact);
+      const url = URL.parse(artifact);
 
       // The holder chooses this url, so nothing outside gist.github.com is ever fetched.
-      if (url.protocol !== 'https:' || url.host !== 'gist.github.com')
-        throw new Error('Not a gist address');
+      if (!url || url.protocol !== 'https:' || url.host !== 'gist.github.com')
+        throw new Refused('Not a gist address');
 
       const id = url.pathname.split('/').filter(Boolean).at(-1) ?? '';
 
-      if (!/^[0-9a-f]{20,32}$/.test(id)) throw new Error('Not a gist address');
+      if (!/^[0-9a-f]{20,32}$/.test(id)) throw new Refused('Not a gist address');
 
       const response = await request(`https://api.github.com/gists/${id}`, {
         headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'Verity-V0' },
@@ -37,10 +37,10 @@ export function githubGistProvider(options: { fetch?: typeof fetch } = {}): Arti
 
       const gist: unknown = await response.json();
 
-      if (!response.ok || !isRecord(gist)) throw new Error('Gist unavailable');
+      if (!response.ok || !isRecord(gist)) throw new Refused('Gist unavailable');
 
       // A secret gist proves nothing a reader could check for themselves.
-      if (gist.public !== true) throw new Error('Gist is not public');
+      if (gist.public !== true) throw new Refused('Gist is not public');
 
       const owner = gist.owner;
 
@@ -51,10 +51,10 @@ export function githubGistProvider(options: { fetch?: typeof fetch } = {}): Arti
         typeof owner.login !== 'string' ||
         !/^[a-zA-Z0-9-]+$/.test(owner.login)
       )
-        throw new Error('Invalid gist owner');
+        throw new Refused('Invalid gist owner');
 
       if (!isRecord(gist.files) || !contains(gist.files, expect))
-        throw new Error('Gist does not contain the expected line');
+        throw new Refused('Gist does not contain the expected line');
 
       return {
         id: String(owner.id),

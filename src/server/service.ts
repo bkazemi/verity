@@ -4,6 +4,7 @@ import {
   freshnessMs,
   isArtifactProvider,
   providerMethod,
+  Refused,
   status,
   type ArtifactProvider,
   type Attestation,
@@ -308,8 +309,8 @@ export class VerityService {
       const external = await provider.verify({ artifact, expect });
 
       await this.established(id, binding, external, artifact);
-    } catch {
-      await this.failed(id);
+    } catch (error) {
+      await this.failed(id, error);
     }
 
     return id;
@@ -356,8 +357,8 @@ export class VerityService {
       });
 
       await this.established(id, binding, external);
-    } catch {
-      await this.failed(id);
+    } catch (error) {
+      await this.failed(id, error);
     }
 
     return id;
@@ -395,10 +396,12 @@ export class VerityService {
         if (
           !connection ||
           connection.provider !== this.providerOf(flow).id ||
-          !matches(flow.kind, connection.external, external) ||
           connection.revokedAt !== undefined
         )
           throw new Unavailable();
+
+        if (!matches(flow.kind, connection.external, external))
+          throw new Refused('This is a different account from the one this connection links');
 
         flow.local = connection.local;
       }
@@ -411,13 +414,17 @@ export class VerityService {
     });
   }
 
-  /** A failed check leaves the flow dead rather than retryable in place. */
-  private async failed(id: string) {
+  /**
+   * A failed check leaves the flow dead rather than retryable in place. Only a `Refused`
+   * reason is kept: any other error may describe this backend rather than the proof.
+   */
+  private async failed(id: string, error: unknown) {
     await this.options.storage.transaction(async (tx) => {
       const flow = await tx.get('flows', id);
 
       if (flow?.phase === 'exchanging') {
         flow.phase = 'failed';
+        flow.reason = error instanceof Refused ? error.message : undefined;
         await tx.put('flows', id, flow);
       }
     });

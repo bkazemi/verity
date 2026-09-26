@@ -455,6 +455,7 @@ test('a holder-paced proof is published, read back, and kept open for the reader
   provider.artifacts.set(url, other.expect!);
   await f.service.submit(flow.flowId, flow.binding, url);
   assert.equal((await f.service.flow(flow.flowId, flow.binding)).phase, 'failed');
+  assert.equal((await f.service.flow(flow.flowId, flow.binding)).reason, 'Line not found');
 
   // A failed check is dead rather than retryable in place.
   provider.artifacts.set(url, flow.expect!);
@@ -492,6 +493,8 @@ test('an artifact flow refuses a location the provider will not accept', async (
   await f.service.submit(flow.flowId, flow.binding, 'https://evil.test/alice');
 
   assert.equal((await f.service.flow(flow.flowId, flow.binding)).phase, 'failed');
+  // Only a Refused reason is the holder's to read; any other error stays with the backend.
+  assert.equal((await f.service.flow(flow.flowId, flow.binding)).reason, undefined);
   assert.deepEqual(await f.service.mine(alice), []);
 });
 

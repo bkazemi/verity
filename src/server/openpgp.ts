@@ -15,6 +15,7 @@ import {
   type CleartextMessage,
   type Key,
 } from 'openpgp';
+import { Refused } from '../core/index.js';
 
 /** A key or signature arrives as text from a stranger, so every input is bounded first. */
 const maxArmorBytes = 65536;
@@ -40,7 +41,7 @@ const config = {
   ]),
 };
 
-export class Malformed extends Error {
+export class Malformed extends Refused {
   constructor(what: string, options?: ErrorOptions) {
     super(`Malformed OpenPGP ${what}`, options);
   }

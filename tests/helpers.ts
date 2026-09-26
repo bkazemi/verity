@@ -1,3 +1,4 @@
+import { Refused } from '../src/core/index.js';
 import type {
   Instruction,
   Records,
@@ -108,7 +109,8 @@ export function fakeArtifactProvider(): ArtifactProvider & {
 
       if (new URL(artifact).host !== 'notes.test') throw new Error('Not a notes address');
 
-      if (artifacts.get(artifact) !== expect) throw new Error('Line not found');
+      // A reason for the holder, beside the check above whose error is only the backend's.
+      if (artifacts.get(artifact) !== expect) throw new Refused('Line not found');
 
       return Promise.resolve({
         id: this.externalId,

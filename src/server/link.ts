@@ -2,7 +2,12 @@ import { legacyHookDecode } from '@exodus/bytes/encoding.js';
 import htmlEncodingSniffer from 'html-encoding-sniffer';
 import { MIMEType } from 'node:util';
 import { html, parse, type DefaultTreeAdapterTypes } from 'parse5';
-import type { ArtifactProvider, ExternalAccount, LocalAccount } from '../core/index.js';
+import {
+  Refused,
+  type ArtifactProvider,
+  type ExternalAccount,
+  type LocalAccount,
+} from '../core/index.js';
 import { discard, readBounded } from './body.js';
 import { pinnable, publicFetch, type Fetch } from './public-fetch.js';
 
@@ -116,11 +121,14 @@ export function linkProvider(options: LinkProviderOptions): ArtifactProvider {
       const page = address(artifact, hosts);
       const subject = new URL(expect);
 
+      // Why a page could not be reached is about the network this runs in, not the page.
       const response = await request(page.href, {
         // Workers refuse 'error', so a redirect comes back as a response and is refused below.
         redirect: 'manual',
         headers: { Accept: 'text/html, */*;q=0.1', 'User-Agent': 'Verity-V0' },
         signal: AbortSignal.timeout(options.timeoutMs ?? 15000),
+      }).catch(() => {
+        throw new Refused('Page could not be reached');
       });
 
       try {
@@ -148,9 +156,9 @@ async function backlinked(
 ): Promise<void> {
   // The holder named this address, so a redirect would take the check somewhere else.
   if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400))
-    throw new Error('Page redirects, and a redirect is not followed');
+    throw new Refused('Page redirects, and a redirect is not followed');
 
-  if (!response.ok) throw new Error('Page unavailable');
+  if (!response.ok) throw new Refused('Page unavailable');
 
   // A link relation is a link relation wherever it is declared, and a page with no
   // HTML of its own can still carry one in its headers.
@@ -161,7 +169,7 @@ async function backlinked(
   const type = mediaType(response.headers.get('content-type'));
 
   if (!type || !rendered(type))
-    throw new Error('Page is not HTML, and its headers carry no rel="me" link to this subject');
+    throw new Refused('Page is not HTML, and its headers carry no rel="me" link to this subject');
 
   // Finding the link in what was read still proves the claim; not finding it in part of
   // a page proves nothing.
@@ -191,7 +199,7 @@ async function backlinked(
   }
 
   // Not finding it in part of a page is not the same as it not being there.
-  throw new Error(
+  throw new Refused(
     truncated ? 'Page is too large to read' : 'Page has no rel="me" link to this subject',
   );
 }
@@ -222,9 +230,12 @@ function transport(options: LinkProviderOptions): Fetch {
  * Where the name really resolves is checked when it is fetched.
  */
 function address(artifact: string, hosts?: string[]): URL {
-  if (artifact.length > 2000) throw new Error('Not an address this can read');
+  if (artifact.length > 2000) throw new Refused('Not an address this can read');
 
-  const url = new URL(artifact);
+  const url = URL.parse(artifact);
+
+  if (!url) throw new Refused('Not an address this can read');
+
   const host = url.hostname.toLowerCase();
 
   if (
@@ -236,9 +247,9 @@ function address(artifact: string, hosts?: string[]): URL {
     /^[\d.]+$/.test(host) ||
     reserved.includes(host.split('.').pop()!)
   )
-    throw new Error('Not an address this can read');
+    throw new Refused('Not an address this can read');
 
-  if (hosts && !hosts.includes(host)) throw new Error('Not a host this instance reads');
+  if (hosts && !hosts.includes(host)) throw new Refused('Not a host this instance reads');
 
   return url;
 }

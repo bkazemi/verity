@@ -342,12 +342,13 @@ export function createVerity(options: ServerOptions) {
     return offered;
   }
 
-  function result(outcome: string, id = '') {
+  /** A failure names its reason when the provider gave one meant for the holder. */
+  function result(outcome: string, id = '', reason?: string) {
     return html(
       page(
         prefix,
         'Verification result',
-        `<p>${escape(outcome)}</p><div id="verity-result" data-outcome="${escape(outcome)}" data-id="${escape(id)}"></div><script src="${escape(prefix)}/result.js" defer></script><p>You can close this window and return to account settings.</p>`,
+        `<p>${escape(outcome)}</p>${reason ? `<p>${escape(reason)}.</p>` : ''}<div id="verity-result" data-outcome="${escape(outcome)}" data-id="${escape(id)}"></div><script src="${escape(prefix)}/result.js" defer></script><p>You can close this window and return to account settings.</p>`,
       ),
     );
   }
@@ -518,7 +519,7 @@ export function createVerity(options: ServerOptions) {
             );
           }
 
-          if (flow.phase !== 'approval') return result(flow.phase, flow.resultId);
+          if (flow.phase !== 'approval') return result(flow.phase, flow.resultId, flow.reason);
 
           if (
             !['revoke', 'share-revoke'].includes(flow.kind) &&

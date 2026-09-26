@@ -311,6 +311,38 @@ test('a holder-paced proof is published here, submitted here, and approved here'
   assert.ok(page.includes(url));
 });
 
+test('a refused proof says why on the result page, and any other failure does not', async () => {
+  const provider = fakeArtifactProvider();
+  const f = fixture(provider);
+
+  async function submit(artifact: string) {
+    const start = await f.request('/sessions?kind=connect', { headers: { cookie: 'local=alice' } });
+    const cookie = `${start.headers.get('set-cookie')!.split(';')[0]!}; local=alice`;
+    const path = start.headers.get('location')!.replace('/api/verity', '');
+
+    await f.request(`${path}/submit`, {
+      method: 'POST',
+      headers: {
+        origin: 'https://site.test',
+        cookie,
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      body: `artifact=${encodeURIComponent(artifact)}`,
+    });
+
+    return (await f.request(path, { headers: { cookie } })).text();
+  }
+
+  const refused = await submit('https://notes.test/alice/1');
+
+  assert.match(refused, /<p>failed<\/p><p>Line not found\.<\/p>/);
+
+  const broken = await submit('https://evil.test/alice');
+
+  assert.match(broken, /<p>failed<\/p><div/);
+  assert.doesNotMatch(broken, /Not a notes address/);
+});
+
 test('several methods are offered one by one, and a second one joins the record', async () => {
   const oauth = fakeProvider();
   const notes = { ...fakeArtifactProvider(), id: 'github', name: 'GitHub' };
