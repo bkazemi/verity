@@ -355,13 +355,15 @@ test('distributed badge renders current/expired/revoked evidence and fails close
     ...evidence,
     attestations: {
       local: declared,
-      external: {
-        by: 'provider',
-        method: 'attestation',
-        artifactUrl: 'https://gist.github.com/alice/abc',
-        expect: 'verity-token',
-        confirmedAt: 2,
-      },
+      external: [
+        {
+          by: 'provider',
+          method: 'attestation',
+          artifactUrl: 'https://gist.github.com/alice/abc',
+          expect: 'verity-token',
+          confirmedAt: 2,
+        },
+      ],
     },
   };
 
@@ -375,12 +377,14 @@ test('distributed badge renders current/expired/revoked evidence and fails close
     // One side described and the other missing would let a renderer imply a method
     // for a side that never reported one.
     { attestations: { local: declared } },
-    { attestations: { local: declared, external: { ...declared, by: 'nobody' } } },
+    { attestations: { local: declared, external: [{ ...declared, by: 'nobody' }] } },
+    // The first method is the one a record is judged by, so there must be one.
+    { attestations: { local: declared, external: [] } },
     // An artifact url is rendered as a link, so only http(s) may ever reach an href.
     {
       attestations: {
         local: declared,
-        external: { ...declared, by: 'provider', artifactUrl: 'javascript:alert(1)' },
+        external: [{ ...declared, by: 'provider', artifactUrl: 'javascript:alert(1)' }],
       },
     },
   ]) {
@@ -518,13 +522,15 @@ async function renderDialog(
 test('the evidence dialog presents both sides of a link as parallel cards', async () => {
   const { dialog, cards } = await renderDialog({
     local: { by: 'backend', method: 'declared', confirmedAt: 1 },
-    external: {
-      by: 'provider',
-      method: 'attestation',
-      artifactUrl: 'https://gist.github.com/alice/abc',
-      expect: 'verity-c1',
-      confirmedAt: 2,
-    },
+    external: [
+      {
+        by: 'provider',
+        method: 'attestation',
+        artifactUrl: 'https://gist.github.com/alice/abc',
+        expect: 'verity-c1',
+        confirmedAt: 2,
+      },
+    ],
   });
 
   // Both sides render as cards, so neither reads as a caption on the other.
@@ -599,7 +605,7 @@ test('the evidence dialog presents both sides of a link as parallel cards', asyn
 test('an unrecognised method is omitted rather than described, and oauth offers no proof link', async () => {
   const unknown = await renderDialog({
     local: { by: 'backend', method: 'declared', confirmedAt: 1 },
-    external: { by: 'provider', method: 'telepathy', confirmedAt: 2 },
+    external: [{ by: 'provider', method: 'telepathy', confirmedAt: 2 }],
   });
 
   assert.match(unknown.dialog.textContent, /Stated by site\.test/);
@@ -611,7 +617,7 @@ test('an unrecognised method is omitted rather than described, and oauth offers 
   // oauth leaves no public artifact, so it is named without offering a link to open.
   const signedIn = await renderDialog({
     local: { by: 'backend', method: 'declared', confirmedAt: 1 },
-    external: { by: 'provider', method: 'oauth', confirmedAt: 2 },
+    external: [{ by: 'provider', method: 'oauth', confirmedAt: 2 }],
   });
 
   assert.match(signedIn.dialog.textContent, /Signed in with GitHub/);
@@ -629,12 +635,14 @@ test('an unrecognised method is omitted rather than described, and oauth offers 
 test('a proof gone unread reads as unconfirmed, not as an approval that ran out', async () => {
   const attestations = {
     local: { by: 'backend', method: 'declared', confirmedAt: 1 },
-    external: {
-      by: 'provider',
-      method: 'attestation',
-      artifactUrl: 'https://gist.github.com/alice/abc',
-      confirmedAt: 1,
-    },
+    external: [
+      {
+        by: 'provider',
+        method: 'attestation',
+        artifactUrl: 'https://gist.github.com/alice/abc',
+        confirmedAt: 1,
+      },
+    ],
   };
 
   const stale = await renderDialog(attestations, { status: 'expired' });
@@ -661,13 +669,15 @@ test('a key is named by its fingerprint, with no @ and the provider written once
   const { cards } = await renderDialog(
     {
       local: { by: 'backend', method: 'declared', confirmedAt: 1 },
-      external: {
-        by: 'provider',
-        method: 'signature',
-        artifactUrl: 'https://verifier.test/api/verity/connections/c1/proof',
-        hosted: true,
-        confirmedAt: 2,
-      },
+      external: [
+        {
+          by: 'provider',
+          method: 'signature',
+          artifactUrl: 'https://verifier.test/api/verity/connections/c1/proof',
+          hosted: true,
+          confirmedAt: 2,
+        },
+      ],
     },
     {
       provider: 'openpgp',
@@ -703,7 +713,7 @@ test('a key is named by its fingerprint, with no @ and the provider written once
 test('an account still reads as a handle, and its provider mark is still drawn', async () => {
   const { cards } = await renderDialog({
     local: { by: 'backend', method: 'declared', confirmedAt: 1 },
-    external: { by: 'provider', method: 'oauth', confirmedAt: 2 },
+    external: [{ by: 'provider', method: 'oauth', confirmedAt: 2 }],
   });
 
   const heading = cards[1]!.find('h3')[0]!;
@@ -713,11 +723,11 @@ test('an account still reads as a handle, and its provider mark is still drawn',
   assert.equal(heading.find('svg').length, 1);
 });
 
-test('further methods sit beneath the main one, each with its own proof', async () => {
+test('methods after the first sit beneath it, each with its own proof', async () => {
   const { cards } = await renderDialog({
     local: { by: 'backend', method: 'declared', confirmedAt: 1 },
-    external: { by: 'provider', method: 'oauth', confirmedAt: 2 },
-    further: [
+    external: [
+      { by: 'provider', method: 'oauth', confirmedAt: 2 },
       {
         by: 'provider',
         method: 'backlink',
@@ -728,13 +738,14 @@ test('further methods sit beneath the main one, each with its own proof', async 
   });
 
   const text = cards[1]!.textContent;
-  const further = cards[1]!
+
+  const additional = cards[1]!
     .all()
-    .filter((found) => found.className.includes('further'))
+    .filter((found) => found.className.includes('additional'))
     .map((line) => line.textContent);
 
   assert.match(text, /Signed in with GitHub\+ Linked back to site\.test/);
-  assert.deepEqual(further, ['+ Linked back to site.test', 'View the proof']);
+  assert.deepEqual(additional, ['+ Linked back to site.test', 'View the proof']);
 
   // The method is named in words, never by the markup it happens to use.
   assert.ok(!text.includes('rel='));
@@ -744,12 +755,14 @@ test('a page read by a link back is a record the badge will show', async () => {
   const { cards } = await renderDialog(
     {
       local: { by: 'backend', method: 'declared', confirmedAt: 1 },
-      external: {
-        by: 'provider',
-        method: 'backlink',
-        artifactUrl: 'https://example.test/about',
-        confirmedAt: 2,
-      },
+      external: [
+        {
+          by: 'provider',
+          method: 'backlink',
+          artifactUrl: 'https://example.test/about',
+          confirmedAt: 2,
+        },
+      ],
     },
     {
       provider: 'link',

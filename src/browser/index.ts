@@ -233,9 +233,9 @@ function validAttestations(value: unknown): boolean {
 
   return (
     validAttestation(value.local) &&
-    validAttestation(value.external) &&
-    (value.further === undefined ||
-      (Array.isArray(value.further) && value.further.every(validAttestation)))
+    Array.isArray(value.external) &&
+    value.external.length > 0 &&
+    value.external.every(validAttestation)
   );
 }
 

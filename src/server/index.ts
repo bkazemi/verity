@@ -122,7 +122,7 @@ function card(
 function attestationNote(
   attestation: Attestation | undefined,
   names: { site: string; provider: string },
-  further = false,
+  additional = false,
 ) {
   const label = attestation && attestationLabel(attestation.method, names);
 
@@ -132,9 +132,9 @@ function attestationNote(
   // only after being confirmed http(s).
   const artifact = attestation.artifactUrl && safeUrl(attestation.artifactUrl);
 
-  const how = `how${further ? ' further' : ''}`;
+  const how = `how${additional ? ' additional' : ''}`;
 
-  return `<p class="${how}">${further ? '+ ' : ''}${escape(label)}</p>${
+  return `<p class="${how}">${additional ? '+ ' : ''}${escape(label)}</p>${
     artifact
       ? `<p class="${how}"><a href="${escape(artifact)}" rel="noreferrer">View the proof</a></p>`
       : ''
@@ -146,10 +146,9 @@ function externalNotes(
   attestations: Attestations | undefined,
   names: { site: string; provider: string },
 ) {
-  return (
-    attestationNote(attestations?.external, names) +
-    (attestations?.further ?? []).map((a) => attestationNote(a, names, true)).join('')
-  );
+  const [main, ...rest] = attestations?.external ?? [];
+
+  return attestationNote(main, names) + rest.map((a) => attestationNote(a, names, true)).join('');
 }
 
 /**
@@ -254,7 +253,9 @@ function evidencePage(e: Evidence & { linkExpiresAt?: number }, base: string, re
         // Only a method that publishes an artifact drifts; a sign-in does not go stale.
         [
           'Last checked',
-          e.attestations?.external.artifactUrl ? e.attestations.external.confirmedAt : undefined,
+          e.attestations?.external[0].artifactUrl
+            ? e.attestations.external[0].confirmedAt
+            : undefined,
         ],
         ['Sharing link expires', e.linkExpiresAt],
       ]) +

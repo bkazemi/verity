@@ -71,14 +71,12 @@ export interface Attestation {
 /** Each side of a link is attested separately, by different parties under different methods. */
 export interface Attestations {
   local: Attestation;
-  /** How the external account was first shown. It stays the main one for the record's life. */
-  external: Attestation;
   /**
-   * Every other method the same external account has since been shown by, in the order
-   * each was first used, at most one per method. They corroborate the main one and never
-   * replace it: a record is still judged by `external`.
+   * Every method the external account has been shown by, in the order each was first
+   * used, at most one per method. The first is the main one for the record's life, and a
+   * record is judged by it; the rest are additional and never replace it.
    */
-  further?: Attestation[];
+  external: [Attestation, ...Attestation[]];
 }
 
 export interface Connection {
@@ -290,9 +288,9 @@ export function status(connection: Connection, now: number, freshness = freshnes
 
   if (now >= connection.expiresAt) return 'expired';
 
-  const external = connection.attestations?.external;
+  const main = connection.attestations?.external[0];
 
-  if (external && !fresh(external, now, freshness)) return 'expired';
+  if (main && !fresh(main, now, freshness)) return 'expired';
 
   return 'verified';
 }

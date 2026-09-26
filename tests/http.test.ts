@@ -226,12 +226,14 @@ test('the evidence page names how each side was established, without ranking the
 
     stored.attestations = {
       local: { by: 'backend', method: 'declared', confirmedAt: 1 },
-      external: {
-        by: 'provider',
-        method: 'attestation',
-        artifactUrl: 'javascript:alert(1)',
-        confirmedAt: 2,
-      },
+      external: [
+        {
+          by: 'provider',
+          method: 'attestation',
+          artifactUrl: 'javascript:alert(1)',
+          confirmedAt: 2,
+        },
+      ],
     };
 
     await tx.put('connections', id, stored);
@@ -300,8 +302,8 @@ test('a holder-paced proof is published here, submitted here, and approved here'
   assert.equal(approved.status, 200);
   const evidence = (await f.app.service.mine(alice))[0]!;
 
-  assert.equal(evidence.attestations!.external.artifactUrl, url);
-  assert.equal(evidence.attestations!.external.method, 'attestation');
+  assert.equal(evidence.attestations!.external[0].artifactUrl, url);
+  assert.equal(evidence.attestations!.external[0].method, 'attestation');
 
   // The published proof is offered to the reader on the evidence page.
   const page = await (await f.request(`/connections/${evidence.id}`)).text();
@@ -402,7 +404,7 @@ test('several methods are offered one by one, and a second one joins the record'
 
   assert.match(
     page,
-    /Signed in with GitHub<\/p><p class="how further">\+ Published a proof on GitHub<\/p><p class="how further"><a/,
+    /Signed in with GitHub<\/p><p class="how additional">\+ Published a proof on GitHub<\/p><p class="how additional"><a/,
   );
 
   assert.equal((await f.app.service.mine(alice)).length, 1);
@@ -465,8 +467,8 @@ test('a proof handed over is taken as text, published here, and served as text',
   const evidence = (await f.app.service.mine(alice))[0]!;
   const at = `/connections/${evidence.id}/proof`;
 
-  assert.equal(evidence.attestations!.external.artifactUrl, `https://site.test/api/verity${at}`);
-  assert.equal(evidence.attestations!.external.hosted, true);
+  assert.equal(evidence.attestations!.external[0].artifactUrl, `https://site.test/api/verity${at}`);
+  assert.equal(evidence.attestations!.external[0].hosted, true);
 
   const served = await f.request(at);
 

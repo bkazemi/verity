@@ -101,11 +101,14 @@ test('a second method on the same account joins the record beneath the first', a
   const evidence = await f.service.read(id);
 
   assert.equal(evidence.visibility, 'public');
-  assert.equal(evidence.attestations!.external.method, 'oauth');
+  assert.equal(evidence.attestations!.external[0].method, 'oauth');
 
   assert.deepEqual(
-    evidence.attestations!.further!.map((a) => [a.method, a.artifactUrl]),
-    [['backlink', 'https://github.com/Known-Alice']],
+    evidence.attestations!.external.map((a) => [a.method, a.artifactUrl]),
+    [
+      ['oauth', undefined],
+      ['backlink', 'https://github.com/Known-Alice'],
+    ],
   );
 
   // The record keeps the account the first method named, not the address the second read.
@@ -132,7 +135,7 @@ test('the same method again makes a record of its own, as it always did', async 
   const second = await f.signIn();
 
   assert.notEqual(first, second);
-  assert.equal((await f.service.read(second)).attestations!.further, undefined);
+  assert.equal((await f.service.read(second)).attestations!.external.length, 1);
 });
 
 test('a renewal by another method adds it, and by the same one keeps it in place', async () => {
@@ -145,9 +148,9 @@ test('a renewal by another method adds it, and by the same one keeps it in place
 
   const evidence = await f.service.read(id);
 
-  assert.equal(evidence.attestations!.external.method, 'oauth');
-  assert.equal(evidence.attestations!.further!.length, 1);
-  assert.equal(evidence.attestations!.further![0]!.confirmedAt, 1000010);
+  assert.equal(evidence.attestations!.external[0].method, 'oauth');
+  assert.equal(evidence.attestations!.external.length, 2);
+  assert.equal(evidence.attestations!.external[1]!.confirmedAt, 1000010);
 });
 
 test('a record renewed at a differently written address is reread at that address', async () => {
@@ -200,7 +203,7 @@ test("a record proved by a link to the subject's old address is not joined", asy
   assert.equal((await f.service.read(id, alice)).local.profileUrl, alice.profileUrl);
 });
 
-test('joining at a new address drops the further proofs that named the old one', async () => {
+test('joining at a new address drops the additional proofs that named the old one', async () => {
   // A method whose proof is a token minted per flow, which names no subject.
   const notes = { ...fakeArtifactProvider(), id: 'github', name: 'GitHub' };
   const f = fixture([notes]);
@@ -223,8 +226,8 @@ test('joining at a new address drops the further proofs that named the old one',
   assert.equal(evidence.local.profileUrl, moved.profileUrl);
 
   assert.deepEqual(
-    evidence.attestations!.further!.map((a) => a.method),
-    ['attestation'],
+    evidence.attestations!.external.map((a) => a.method),
+    ['oauth', 'attestation'],
   );
 
   // Nothing is left to confirm the link to where the subject used to be.
@@ -244,11 +247,11 @@ test('a different account on the same provider is not joined by its profile alon
   // Both ids were issued by GitHub, so they settle it whatever the profiles say.
   const other = await f.signIn();
 
-  assert.equal((await f.service.read(other)).attestations!.further, undefined);
+  assert.equal((await f.service.read(other)).attestations!.external.length, 1);
   assert.equal((await f.service.mine(alice)).length, 2);
 });
 
-test('a further proof is reread, and leaves the record while it goes unread', async () => {
+test('an additional proof is reread, and leaves the record while it goes unread', async () => {
   const f = fixture();
   const id = await f.signIn();
 
@@ -258,14 +261,14 @@ test('a further proof is reread, and leaves the record while it goes unread', as
   assert.equal(await f.service.recheck(), 1);
   assert.equal(f.backlink.calls, 2);
 
-  // Taken down: rereads fail, and once stale it stops corroborating the record.
+  // Taken down: rereads fail, and once stale it leaves the record.
   f.backlink.pages.clear();
   f.advance(6000);
   assert.equal(await f.service.recheck(), 0);
 
   const evidence = await f.service.read(id);
 
-  assert.equal(evidence.attestations!.further, undefined);
+  assert.equal(evidence.attestations!.external.length, 1);
   // The main method is untouched, so the record itself still stands.
   assert.equal(evidence.status, 'verified');
 });

@@ -16,6 +16,7 @@ import {
   type LocalAccount,
   type Method,
   type Provider,
+  type Records,
   type RedirectProvider,
   type Storage,
   type Transaction,
@@ -187,7 +188,7 @@ export class VerityService {
       expiresAt: this.now() + (this.options.flowTtlMs ?? 600000),
     };
 
-    const provider = await this.options.storage.transaction(async (tx) => {
+    const provider = await this.transaction(async (tx) => {
       // Whose link this is. A flow against an existing connection may carry no local
       // subject of its own, and the record is the authority on it in any case.
       let subject = local;
@@ -268,7 +269,7 @@ export class VerityService {
     let provider: Provider;
 
     if (choice.provider === undefined && choice.method === undefined && connection) {
-      const main = connection.attestations?.external.method ?? 'oauth';
+      const main = connection.attestations?.external[0].method ?? 'oauth';
 
       provider =
         this.providers.find((p) => p.id === connection.provider && providerMethod(p) === main) ??
@@ -292,7 +293,7 @@ export class VerityService {
    * or the proof itself. Both are holder-supplied, so the provider decides what counts.
    */
   async submit(id: string, binding: string, artifact: string): Promise<string> {
-    const { provider, expect } = await this.options.storage.transaction(async (tx) => {
+    const { provider, expect } = await this.transaction(async (tx) => {
       const flow = await this.bound(tx, id, binding);
       const provider = this.providerOf(flow);
 
@@ -326,13 +327,13 @@ export class VerityService {
   }
 
   async flow(id: string, binding: string): Promise<Flow> {
-    return this.options.storage.transaction((tx) => this.bound(tx, id, binding));
+    return this.transaction((tx) => this.bound(tx, id, binding));
   }
 
   async callback(state: string, binding: string, code?: string): Promise<string> {
     const id = hash(state);
 
-    const claimed = await this.options.storage.transaction(async (tx) => {
+    const claimed = await this.transaction(async (tx) => {
       const flow = await this.bound(tx, id, binding);
 
       if (flow.phase !== 'pending' || isArtifactProvider(this.providerOf(flow)))
@@ -385,7 +386,7 @@ export class VerityService {
     )
       throw new Unavailable();
 
-    await this.options.storage.transaction(async (tx) => {
+    await this.transaction(async (tx) => {
       const flow = await this.bound(tx, id, binding);
 
       if (flow.phase !== 'exchanging') throw new Unavailable();
@@ -419,7 +420,7 @@ export class VerityService {
    * reason is kept: any other error may describe this backend rather than the proof.
    */
   private async failed(id: string, error: unknown) {
-    await this.options.storage.transaction(async (tx) => {
+    await this.transaction(async (tx) => {
       const flow = await tx.get('flows', id);
 
       if (flow?.phase === 'exchanging') {
@@ -439,7 +440,7 @@ export class VerityService {
   ) {
     if (!['public', 'unlisted'].includes(visibility)) throw new Unavailable();
 
-    return this.options.storage.transaction(async (tx) => {
+    return this.transaction(async (tx) => {
       const flow = await this.bound(tx, id, binding);
 
       if (
@@ -468,7 +469,7 @@ export class VerityService {
         // keeps its id, its visibility and the method it was first shown by; this one is
         // added beneath it, and like a renewal it extends the record it just reproved.
         connection = joined;
-        this.corroborate(connection, flow, provider);
+        this.recordMethod(connection, flow, provider);
       } else if (flow.kind === 'connect') {
         // The id exists before the record does, because a hosted proof is addressed by it.
         const connectionId = secret();
@@ -485,7 +486,7 @@ export class VerityService {
           expiresAt: this.now() + (this.options.validityMs ?? 30 * 86400000),
           attestations: {
             local: this.declared(),
-            external: this.attestation(flow, provider, connectionId),
+            external: [this.attestation(flow, provider, connectionId)],
           },
           proof: hosted(provider) ? flow.artifact : undefined,
         };
@@ -509,7 +510,7 @@ export class VerityService {
           // subject snapshot refreshes because the holder just approved what it shows.
           if (flow.local!.id !== existing.local.id) throw new Unavailable();
 
-          this.corroborate(connection, flow, provider);
+          this.recordMethod(connection, flow, provider);
         } else if (flow.kind === 'revoke') {
           connection.revokedAt = this.now();
           connection.revocationReason = 'external';
@@ -538,10 +539,15 @@ export class VerityService {
     });
   }
 
+  /** Every read of a connection goes through here, so a record in an older shape is upgraded. */
+  private transaction<T>(work: (tx: Transaction) => Promise<T>): Promise<T> {
+    return this.options.storage.transaction((tx) => work(upgraded(tx)));
+  }
+
   /**
-   * The methods a reader is shown. A further method whose proof has gone unread no longer
-   * corroborates anything, so it is left out until it reads again; the main one is never
-   * left out, because the record's status already says what became of it.
+   * The methods a reader is shown. An additional method whose proof has gone unread no
+   * longer shows anything, so it is left out until it reads again; the main one is
+   * never left out, because the record's status already says what became of it.
    */
   private shown(connection: Connection): Attestations {
     if (!connection.attestations)
@@ -549,13 +555,15 @@ export class VerityService {
       // declared its subject and the provider ran the redirect flow, the only one built.
       return {
         local: { by: 'backend', method: 'declared', confirmedAt: connection.approvedAt },
-        external: { by: 'provider', method: 'oauth', confirmedAt: connection.authenticatedAt },
+        external: [{ by: 'provider', method: 'oauth', confirmedAt: connection.authenticatedAt }],
       };
 
-    const { further, ...main } = connection.attestations;
-    const current = further?.filter((a) => fresh(a, this.now(), this.freshness));
+    const [main, ...rest] = connection.attestations.external;
 
-    return current?.length ? { ...main, further: current } : main;
+    return {
+      ...connection.attestations,
+      external: [main, ...rest.filter((a) => fresh(a, this.now(), this.freshness))],
+    };
   }
 
   evidence(connection: Connection): Evidence {
@@ -596,11 +604,11 @@ export class VerityService {
           c.revokedAt === undefined &&
           c.local.id === flow.local!.id &&
           c.provider === provider.id &&
-          (c.attestations?.external.method ?? 'oauth') !== providerMethod(provider) &&
+          (c.attestations?.external[0].method ?? 'oauth') !== providerMethod(provider) &&
           sameAccount(c.external, flow.external!) &&
           // A record first shown by a proof naming the subject's old address is a record
           // of that address. Joining it would show its proof beside the new one.
-          (!c.attestations || this.names(c, c.attestations.external, flow.local!)),
+          (!c.attestations || this.names(c, c.attestations.external[0], flow.local!)),
       )
       .sort((a, b) => b.approvedAt - a.approvedAt)[0];
   }
@@ -613,25 +621,28 @@ export class VerityService {
   async joining(flow: Flow): Promise<Connection | undefined> {
     if (flow.kind !== 'connect' || flow.phase !== 'approval') return undefined;
 
-    return this.options.storage.transaction((tx) => this.joins(tx, flow));
+    return this.transaction((tx) => this.joins(tx, flow));
   }
 
   /**
    * Records that a flow just showed the record's account again. Shown by the method the
    * record was first shown by, it replaces that one; shown another way, it takes that
-   * method's place beneath it, or joins them. Either way the holder approved it and the
+   * method's place after it, or joins the end. Either way the holder approved it and the
    * site reasserted its subject, so the record is extended and its subject refreshed.
    */
-  private corroborate(connection: Connection, flow: Flow, provider: Provider) {
+  private recordMethod(connection: Connection, flow: Flow, provider: Provider) {
     const attestation = this.attestation(flow, provider, connection.id);
-    const main = connection.attestations?.external.method ?? 'oauth';
+
+    const [main, ...rest] = connection.attestations?.external ?? [
+      { by: 'provider', method: 'oauth', confirmedAt: connection.authenticatedAt },
+    ];
 
     connection.local = flow.local!;
     connection.approvedAt = this.now();
     connection.expiresAt = this.now() + (this.options.validityMs ?? 30 * 86400000);
     connection.revocationReason = undefined;
 
-    if (attestation.method === main) {
+    if (attestation.method === main.method) {
       connection.authenticatedAt = flow.authenticatedAt!;
 
       // The account is taken as this method just named it. A recheck asks the same method
@@ -639,33 +650,18 @@ export class VerityService {
       // case names the same profile under a different id.
       connection.external = flow.external!;
 
-      connection.attestations = {
-        local: this.declared(),
-        external: attestation,
-        further: connection.attestations?.further,
-      };
+      connection.attestations = { local: this.declared(), external: [attestation, ...rest] };
     } else {
       // A proof that named the subject's old address proves nothing about its new one,
       // and rereading it would go on confirming a link to where the subject used to be.
-      const further = (connection.attestations?.further ?? []).filter((a) =>
-        this.names(connection, a, flow.local!),
-      );
-
-      const at = further.findIndex((a) => a.method === attestation.method);
+      const others = rest.filter((a) => this.names(connection, a, flow.local!));
+      const at = others.findIndex((a) => a.method === attestation.method);
 
       // A method already listed keeps its place: the order is the order each was first used.
-      if (at < 0) further.push(attestation);
-      else further[at] = attestation;
+      if (at < 0) others.push(attestation);
+      else others[at] = attestation;
 
-      connection.attestations = {
-        local: this.declared(),
-        external: connection.attestations?.external ?? {
-          by: 'provider',
-          method: 'oauth',
-          confirmedAt: connection.authenticatedAt,
-        },
-        further,
-      };
+      connection.attestations = { local: this.declared(), external: [main, ...others] };
     }
 
     if (hosted(provider)) connection.proof = flow.artifact;
@@ -731,7 +727,7 @@ export class VerityService {
    * to hand out, exactly like the evidence page it is linked from.
    */
   async proof(id: string, local?: LocalAccount): Promise<string> {
-    return this.options.storage.transaction(async (tx) => {
+    return this.transaction(async (tx) => {
       const connection = await tx.get('connections', id);
 
       if (
@@ -750,7 +746,7 @@ export class VerityService {
   }
 
   async read(id: string, local?: LocalAccount): Promise<Evidence> {
-    return this.options.storage.transaction(async (tx) => {
+    return this.transaction(async (tx) => {
       const connection = await tx.get('connections', id);
 
       if (!connection || (connection.visibility !== 'public' && connection.local.id !== local?.id))
@@ -767,7 +763,7 @@ export class VerityService {
    * never included: they must not appear in any directory listing.
    */
   async published(): Promise<Evidence[]> {
-    return this.options.storage.transaction(async (tx) =>
+    return this.transaction(async (tx) =>
       (await tx.list('connections'))
         .filter((c) => c.visibility === 'public')
         .map((c) => this.evidence(c))
@@ -776,7 +772,7 @@ export class VerityService {
   }
 
   async mine(local: LocalAccount): Promise<Evidence[]> {
-    return this.options.storage.transaction(async (tx) =>
+    return this.transaction(async (tx) =>
       (await tx.list('connections'))
         .filter((c) => c.local.id === local.id)
         .map((c) => this.evidence(c)),
@@ -792,7 +788,7 @@ export class VerityService {
   }
 
   async revoke(id: string, local: LocalAccount): Promise<void> {
-    await this.options.storage.transaction(async (tx) => {
+    await this.transaction(async (tx) => {
       const connection = await this.owned(tx, id, local);
 
       if (connection.revokedAt !== undefined) return;
@@ -812,7 +808,7 @@ export class VerityService {
   ): Promise<{ url: string; expiresAt: number } | undefined> {
     const token = secret();
 
-    return this.options.storage.transaction(async (tx) => {
+    return this.transaction(async (tx) => {
       const connection = await this.owned(tx, id, local);
 
       if (connection.visibility !== 'unlisted' || connection.revokedAt !== undefined)
@@ -842,7 +838,7 @@ export class VerityService {
   }
 
   async shared(token: string) {
-    return this.options.storage.transaction(async (tx) => {
+    return this.transaction(async (tx) => {
       const share = (await tx.list('shares')).find((s) => s.tokenHash === hash(token));
 
       if (!share || share.revokedAt !== undefined || share.expiresAt <= this.now())
@@ -889,12 +885,12 @@ export class VerityService {
     const interval = this.options.recheckMs ?? 86400000;
     const now = this.now();
 
-    const due = await this.options.storage.transaction(async (tx) =>
+    const due = await this.transaction(async (tx) =>
       (await tx.list('connections'))
         .filter((c) => c.revokedAt === undefined && c.expiresAt > now && c.attestations)
         .flatMap((connection) =>
-          [connection.attestations!.external, ...(connection.attestations!.further ?? [])]
-            .map((attestation) => ({
+          connection
+            .attestations!.external.map((attestation) => ({
               connection,
               attestation,
               provider: this.rereads(connection, attestation),
@@ -939,7 +935,7 @@ export class VerityService {
   /** Asks about one proof and records the answer. Returns 1 when it confirmed. */
   private async reread({ connection, attestation, provider }: Due): Promise<number> {
     const { artifactUrl, expect, method } = attestation;
-    const main = attestation === connection.attestations!.external;
+    const main = attestation === connection.attestations!.external[0];
     let withdrawn = false;
 
     try {
@@ -965,15 +961,14 @@ export class VerityService {
       return 0;
     }
 
-    return this.options.storage.transaction(async (tx) => {
+    return this.transaction(async (tx) => {
       const current = await tx.get('connections', connection.id);
 
       // It may have been revoked or reproved while the fetch was in flight.
       if (!current?.attestations || current.revokedAt !== undefined) return 0;
 
-      const held = main
-        ? current.attestations.external
-        : current.attestations.further?.find((a) => a.method === method);
+      const [first, ...rest] = current.attestations.external;
+      const held = main ? first : rest.find((a) => a.method === method);
 
       if (held?.method !== method || held.artifactUrl !== artifactUrl) return 0;
 
@@ -1015,7 +1010,7 @@ export class VerityService {
   async prune(retentionMs = 90 * 86400000): Promise<void> {
     if (!Number.isSafeInteger(retentionMs) || retentionMs < 0) throw new Error('Invalid retention');
 
-    await this.options.storage.transaction(async (tx) => {
+    await this.transaction(async (tx) => {
       const now = this.now();
 
       for (const flow of await tx.list('flows'))
@@ -1095,6 +1090,37 @@ function sameAccount(a: ExternalAccount, b: ExternalAccount): boolean {
  * profile address can change hands, and its next owner must not be able to remove the
  * last one's record. The weaker match is only for flows the local holder approves.
  */
+/**
+ * Wraps a transaction so connections read through it are in the current shape. Records
+ * written before `external` became a list held the main method there alone and the rest
+ * under `further`; they are rewritten the next time the record is put.
+ */
+function upgraded(tx: Transaction): Transaction {
+  return {
+    get: async (kind, id) => upgrade(kind, await tx.get(kind, id)),
+    put: (kind, id, value) => tx.put(kind, id, value),
+    delete: (kind, id) => tx.delete(kind, id),
+    list: async (kind) => (await tx.list(kind)).map((value) => upgrade(kind, value)!),
+  };
+}
+
+function upgrade<K extends keyof Records>(kind: K, value: Records[K] | undefined) {
+  if (kind !== 'connections' || !value) return value;
+
+  const attestations = (value as Connection).attestations as
+    | { local: Attestation; external: Attestation | Attestation[]; further?: Attestation[] }
+    | undefined;
+
+  if (!attestations || Array.isArray(attestations.external)) return value;
+
+  const { further = [], ...rest } = attestations;
+
+  return {
+    ...value,
+    attestations: { ...rest, external: [attestations.external, ...further] },
+  } as Records[K];
+}
+
 function matches(kind: Flow['kind'], held: ExternalAccount, shown: ExternalAccount): boolean {
   if (kind === 'revoke' || kind === 'share-revoke') return held.id === shown.id;
 

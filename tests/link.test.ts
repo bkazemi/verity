@@ -842,7 +842,7 @@ test('the holder is told to publish the subject, not a string minted here', asyn
   assert.equal(evidence.external.handle, 'example.test/about');
   assert.equal(externalName(evidence.external), 'example.test/about');
 
-  assert.deepEqual(evidence.attestations!.external, {
+  assert.deepEqual(evidence.attestations!.external[0], {
     by: 'provider',
     method: 'backlink',
     artifactUrl: 'https://example.test/about',

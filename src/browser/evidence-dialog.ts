@@ -36,7 +36,7 @@ const styles = `
   .reference { margin-top: 2px; }
   .method { margin-top: 8px; }
   .proof { margin-top: 2px; }
-  .further { margin-top: 2px; padding-left: 12px; }
+  .additional { margin-top: 2px; padding-left: 12px; }
   .joiner { display: block; width: 20px; height: 20px; margin: 8px auto -4px; color: #90a096; }
   dl { margin: 16px 0 0; padding-top: 12px; border-top: 1px solid #e5e9e3; display: grid; grid-template-columns: auto 1fr; gap: 5px 16px; font-size: 11px; }
   dt { color: #6b786f; }
@@ -122,10 +122,10 @@ function attestationNote(
 }
 
 /**
- * The other methods the same account was shown by, each beneath the main one. They
- * corroborate it rather than compete with it, so they are indented under it.
+ * The additional methods the same account was shown by, each beneath the main one and
+ * indented under it.
  */
-function furtherNotes(
+function additionalNotes(
   attestations: Attestation[] | undefined,
   names: { site: string; provider: string },
 ): HTMLElement[] {
@@ -134,11 +134,11 @@ function furtherNotes(
 
     if (!label) return [];
 
-    const note = node('div', `+ ${label}`, 'muted further');
+    const note = node('div', `+ ${label}`, 'muted additional');
 
     if (!attestation.artifactUrl) return [note];
 
-    const proof = node('div', '', 'muted further');
+    const proof = node('div', '', 'muted additional');
 
     proof.append(outward(node('a', 'View the proof'), attestation.artifactUrl));
 
@@ -213,8 +213,9 @@ function render(content: HTMLElement, evidence: Evidence) {
 
   // When an artifact was last read belongs with the other times, not inside a sentence.
   // Only artifact methods drift: a sign-in is established once and does not go stale.
-  if (evidence.attestations?.external.artifactUrl)
-    dateRows.push(['Last checked', evidence.attestations.external.confirmedAt]);
+  const main = evidence.attestations?.external[0];
+
+  if (main?.artifactUrl) dateRows.push(['Last checked', main.confirmedAt]);
 
   for (const [label, time] of dateRows) {
     dates.append(node('dt', label), node('dd', moment(time)));
@@ -248,8 +249,8 @@ function render(content: HTMLElement, evidence: Evidence) {
     // Status first, then how it was shown, then when. The proof explains the state
     // above it, so it cannot sit before that state has been given.
     summary,
-    ...attestationNote(evidence.attestations?.external, names),
-    ...furtherNotes(evidence.attestations?.further, names),
+    ...attestationNote(main, names),
+    ...additionalNotes(evidence.attestations?.external.slice(1), names),
     dates,
   );
 

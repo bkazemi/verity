@@ -96,25 +96,26 @@ const server = createServer((request, response) => {
         local: { by: 'backend', method: 'declared', confirmedAt: Date.now() - 86400000 },
         // The same pair proved two ways, so the preview shows both: a gist anyone can
         // open and check, and a sign-in that publishes nothing.
+        // The signed-in pair was later shown a second way too, so it lists that after.
         external:
           id === 'signed'
-            ? signature
+            ? [signature]
             : ['current', 'unconfirmed'].includes(id)
-              ? proof
-              : { by: 'provider', method: 'oauth', confirmedAt: Date.now() - 86400000 },
-        // The signed-in pair was later shown a second way too, so it lists that beneath.
-        further:
-          id === 'signed-in'
-            ? [
-                {
-                  by: 'provider',
-                  method: 'backlink',
-                  artifactUrl: `${origin}/demo`,
-                  expect: 'https://joesite.example/joe',
-                  confirmedAt: Date.now() - 3600000,
-                },
-              ]
-            : undefined,
+              ? [proof]
+              : [
+                  { by: 'provider', method: 'oauth', confirmedAt: Date.now() - 86400000 },
+                  ...(id === 'signed-in'
+                    ? [
+                        {
+                          by: 'provider' as const,
+                          method: 'backlink' as const,
+                          artifactUrl: `${origin}/demo`,
+                          expect: 'https://joesite.example/joe',
+                          confirmedAt: Date.now() - 3600000,
+                        },
+                      ]
+                    : []),
+                ],
       },
     };
 

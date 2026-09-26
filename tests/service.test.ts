@@ -377,7 +377,7 @@ test('each side records how it was attested, and only re-establishing a side rec
 
   // The provider establishes the other side by whatever method its implementation uses,
   // and an implementation that does not say which is the redirect flow.
-  assert.deepEqual(initial.external, { by: 'provider', method: 'oauth', confirmedAt: 1000000 });
+  assert.deepEqual(initial.external, [{ by: 'provider', method: 'oauth', confirmedAt: 1000000 }]);
 
   // A visibility change re-establishes neither side, so it must not restate either.
   f.advance(500);
@@ -406,14 +406,14 @@ test('each side records how it was attested, and only re-establishing a side rec
   const renewed = (await f.service.read(id)).attestations!;
 
   assert.ok(renewed.local.confirmedAt > initial.local.confirmedAt);
-  assert.ok(renewed.external.confirmedAt > initial.external.confirmedAt);
+  assert.ok(renewed.external[0].confirmedAt > initial.external[0].confirmedAt);
 });
 
 test('a provider naming its own method has it recorded, and older records infer theirs', async () => {
   const f = fixture();
   const { id } = await f.connect('public');
 
-  assert.equal((await f.service.read(id)).attestations!.external.method, 'oauth');
+  assert.equal((await f.service.read(id)).attestations!.external[0].method, 'oauth');
   assert.equal((await f.service.read(id)).provider, f.provider.id);
 
   // Records stored before methods were kept still have a knowable method: the site
@@ -428,7 +428,35 @@ test('a provider naming its own method has it recorded, and older records infer 
   const inferred = (await f.service.read(id)).attestations!;
 
   assert.deepEqual(inferred.local, { by: 'backend', method: 'declared', confirmedAt: 1000000 });
-  assert.deepEqual(inferred.external, { by: 'provider', method: 'oauth', confirmedAt: 1000000 });
+  assert.deepEqual(inferred.external, [{ by: 'provider', method: 'oauth', confirmedAt: 1000000 }]);
+});
+
+test('a record from before external was a list reads as one, main method first', async () => {
+  const f = fixture();
+  const { id } = await f.connect('public');
+  const oauth = { by: 'provider', method: 'oauth', confirmedAt: 1000000 } as const;
+
+  const backlink = {
+    by: 'provider',
+    method: 'backlink',
+    artifactUrl: 'https://github.com/alice',
+    confirmedAt: 1000000,
+  } as const;
+
+  await f.storage.transaction(async (tx) => {
+    const stored = (await tx.get('connections', id))!;
+
+    // The shape it was stored in then: the main method alone, the rest beside it.
+    (stored as { attestations: unknown }).attestations = {
+      local: stored.attestations!.local,
+      external: oauth,
+      further: [backlink],
+    };
+
+    await tx.put('connections', id, stored);
+  });
+
+  assert.deepEqual((await f.service.read(id)).attestations!.external, [oauth, backlink]);
 });
 
 test('a holder-paced proof is published, read back, and kept open for the reader', async () => {
@@ -471,7 +499,7 @@ test('a holder-paced proof is published, read back, and kept open for the reader
   const evidence = await f.service.read(id);
 
   // The proof stays open: where it is, what should be there, and when it was read.
-  assert.deepEqual(evidence.attestations!.external, {
+  assert.deepEqual(evidence.attestations!.external[0], {
     by: 'provider',
     method: 'attestation',
     artifactUrl: url,
@@ -547,7 +575,7 @@ test('a published proof is read again on a schedule and carries the time forward
   const evidence = await f.service.read(f.id);
 
   assert.equal(evidence.status, 'verified');
-  assert.equal(evidence.attestations!.external.confirmedAt, 1001000);
+  assert.equal(evidence.attestations!.external[0].confirmedAt, 1001000);
 
   // For an artifact method this is when it was last confirmed, not first seen.
   assert.equal(evidence.authenticatedAt, 1001000);
@@ -568,7 +596,7 @@ test('a proof that stops resolving ages out of verified and returns when it does
   assert.deepEqual(await f.service.published(), []);
 
   // Nothing was revoked, so republishing the proof restores the connection.
-  f.provider.artifacts.set(f.url, (await f.service.read(f.id)).attestations!.external.expect!);
+  f.provider.artifacts.set(f.url, (await f.service.read(f.id)).attestations!.external[0].expect!);
   assert.equal(await f.service.recheck(), 1);
   assert.equal((await f.service.read(f.id)).status, 'verified');
   assert.equal((await f.service.published()).length, 1);
@@ -610,7 +638,7 @@ test('a reread that names a different account confirms nothing', async () => {
   f.advance(1000);
 
   assert.equal(await f.service.recheck(), 0);
-  assert.equal((await f.service.read(f.id)).attestations!.external.confirmedAt, 1000000);
+  assert.equal((await f.service.read(f.id)).attestations!.external[0].confirmedAt, 1000000);
 
   f.advance(4000);
   assert.equal((await f.service.read(f.id)).status, 'expired');
@@ -623,7 +651,7 @@ test('a provider that never answers does not hold up the run', async () => {
   f.advance(1000);
 
   assert.equal(await f.service.recheck(), 0);
-  assert.equal((await f.service.read(f.id)).attestations!.external.confirmedAt, 1000000);
+  assert.equal((await f.service.read(f.id)).attestations!.external[0].confirmedAt, 1000000);
 });
 
 test('each run spends a bounded number of requests, oldest proof first', async () => {
@@ -650,7 +678,7 @@ test('each run spends a bounded number of requests, oldest proof first', async (
   assert.equal(f.provider.calls - before, 2);
 
   const confirmed = await Promise.all(
-    ids.map(async (id) => (await f.service.read(id)).attestations!.external.confirmedAt),
+    ids.map(async (id) => (await f.service.read(id)).attestations!.external[0].confirmedAt),
   );
 
   // The two longest unread went first; the others keep the times they already had.
@@ -687,11 +715,11 @@ test('a proof handed over is published here and addressed by the connection it p
   const f = await held();
   const evidence = await f.service.read(f.id);
 
-  assert.deepEqual(evidence.attestations!.external, {
+  assert.deepEqual(evidence.attestations!.external[0], {
     by: 'provider',
     method: 'signature',
     artifactUrl: `https://site.test/api/verity/connections/${f.id}/proof`,
-    expect: evidence.attestations!.external.expect,
+    expect: evidence.attestations!.external[0].expect,
     hosted: true,
     confirmedAt: 1000000,
   });
