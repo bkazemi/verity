@@ -1,6 +1,6 @@
 {
   "name": "@bkazemi/verity",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "Self-hosted account-to-account verification for Node.js",
   "type": "module",
   "license": "MIT",
