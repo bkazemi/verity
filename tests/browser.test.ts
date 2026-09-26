@@ -728,8 +728,13 @@ test('further methods sit beneath the main one, each with its own proof', async 
   });
 
   const text = cards[1]!.textContent;
+  const further = cards[1]!
+    .all()
+    .filter((found) => found.className.includes('further'))
+    .map((line) => line.textContent);
 
-  assert.match(text, /Signed in with GitHub\+ Linked back to site\.test · View the proof/);
+  assert.match(text, /Signed in with GitHub\+ Linked back to site\.test/);
+  assert.deepEqual(further, ['+ Linked back to site.test', 'View the proof']);
 
   // The method is named in words, never by the markup it happens to use.
   assert.ok(!text.includes('rel='));

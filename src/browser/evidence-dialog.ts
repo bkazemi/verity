@@ -36,7 +36,7 @@ const styles = `
   .reference { margin-top: 2px; }
   .method { margin-top: 8px; }
   .proof { margin-top: 2px; }
-  .further { margin-top: 2px; }
+  .further { margin-top: 2px; padding-left: 12px; }
   .joiner { display: block; width: 20px; height: 20px; margin: 8px auto -4px; color: #90a096; }
   dl { margin: 16px 0 0; padding-top: 12px; border-top: 1px solid #e5e9e3; display: grid; grid-template-columns: auto 1fr; gap: 5px 16px; font-size: 11px; }
   dt { color: #6b786f; }
@@ -122,9 +122,8 @@ function attestationNote(
 }
 
 /**
- * The other methods the same account was shown by, each on one line beneath the main
- * one. They corroborate it rather than compete with it, so they are set smaller and
- * carry their proof on the same line.
+ * The other methods the same account was shown by, each beneath the main one. They
+ * corroborate it rather than compete with it, so they are indented under it.
  */
 function furtherNotes(
   attestations: Attestation[] | undefined,
@@ -137,14 +136,13 @@ function furtherNotes(
 
     const note = node('div', `+ ${label}`, 'muted further');
 
-    if (attestation.artifactUrl) {
-      note.append(
-        document.createTextNode(' · '),
-        outward(node('a', 'View the proof'), attestation.artifactUrl),
-      );
-    }
+    if (!attestation.artifactUrl) return [note];
 
-    return [note];
+    const proof = node('div', '', 'muted further');
+
+    proof.append(outward(node('a', 'View the proof'), attestation.artifactUrl));
+
+    return [note, proof];
   });
 }
 

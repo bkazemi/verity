@@ -132,11 +132,13 @@ function attestationNote(
   // only after being confirmed http(s).
   const artifact = attestation.artifactUrl && safeUrl(attestation.artifactUrl);
 
-  return `<p class="how${further ? ' further' : ''}">${further ? '+ ' : ''}${escape(label)}${
+  const how = `how${further ? ' further' : ''}`;
+
+  return `<p class="${how}">${further ? '+ ' : ''}${escape(label)}</p>${
     artifact
-      ? `${further ? ' · ' : '</p><p class="how">'}<a href="${escape(artifact)}" rel="noreferrer">View the proof</a>`
+      ? `<p class="${how}"><a href="${escape(artifact)}" rel="noreferrer">View the proof</a></p>`
       : ''
-  }</p>`;
+  }`;
 }
 
 /** The external side's methods: the one it was first shown by, then each one since. */

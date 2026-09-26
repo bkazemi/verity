@@ -152,6 +152,7 @@ code { font: .8125rem/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; }
 .reference, .how { margin: 0; color: var(--muted); font-size: .8125rem; line-height: 1.5; }
 
 .name + .how, .reference + .how { margin-top: .5rem; }
+.how.further { padding-left: .75rem; }
 
 .fine { color: var(--muted); font-size: .8125rem; line-height: 1.55; margin-bottom: .625rem; }
 
