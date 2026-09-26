@@ -126,7 +126,7 @@ import { init } from '@bkazemi/verity'; // also registers <verity-badge>
 const client = init({ backendUrl: '/api/verity' });
 ```
 
-Without one, serve `node_modules/@bkazemi/verity/dist/verity.js` yourself, or load it from a CDN such as `https://cdn.jsdelivr.net/npm/@bkazemi/verity@0.0.2/dist/verity.js`. The script defines a global `Verity`.
+Without one, serve `node_modules/@bkazemi/verity/dist/verity.js` yourself, or load it from a CDN such as `https://cdn.jsdelivr.net/npm/@bkazemi/verity@0.0.3/dist/verity.js`. The script defines a global `Verity`.
 
 Then place the badge wherever the account appears:
 
@@ -197,7 +197,7 @@ A static site only needs the script and the badge markup; the backend runs somew
 4. Add the script and the badge to your site:
 
 ```html
-<script src="https://cdn.jsdelivr.net/npm/@bkazemi/verity@0.0.2/dist/verity.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/@bkazemi/verity@0.0.3/dist/verity.js" defer></script>
 <verity-badge
   backend-url="https://your-backend.example/api/verity"
   connection-id="CONNECTION_ID"
