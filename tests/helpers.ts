@@ -98,7 +98,7 @@ export function fakeArtifactProvider(): ArtifactProvider & {
   return {
     id: 'notes',
     name: 'Notes',
-    method: 'attestation',
+    method: 'gist',
     artifact: 'location',
     artifacts,
     externalId: '42',

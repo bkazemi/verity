@@ -47,7 +47,7 @@ const server = createServer((request, response) => {
     // connection whose proof has gone unread: inside its approval, outside its freshness.
     const proof = {
       by: 'provider' as const,
-      method: 'attestation' as const,
+      method: 'gist' as const,
       artifactUrl: 'https://gist.github.com/joe/3f8a1c9e2b7d4506a1f2',
       expect: 'Verity proof for JoeSite: 9Qv2bXkP',
       confirmedAt: Date.now() - (id === 'unconfirmed' ? 9 * 86400000 : 3600000),
@@ -85,7 +85,9 @@ const server = createServer((request, response) => {
         ? 'verified'
         : id === 'revoked'
           ? 'revoked'
-          : 'expired',
+          : id === 'unconfirmed'
+            ? 'unconfirmed'
+            : 'expired',
       authenticatedAt: Date.now() - 86400000,
       approvedAt: Date.now() - 86400000,
       visibilityApprovedAt: Date.now() - 86400000,

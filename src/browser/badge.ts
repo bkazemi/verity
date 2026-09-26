@@ -209,7 +209,7 @@ export function renderBadgeMessage(element: HTMLElement, message: string): void 
  * a periodic refresh that changes nothing must not disturb what is on screen.
  */
 export function renderBadge(element: HTMLElement, evidence: Evidence): HTMLAnchorElement | null {
-  const provider = evidence.providerName ?? evidence.provider;
+  const provider = evidence.providerName;
   const current = evidence.status === 'verified' && evidence.expiresAt > Date.now();
   const state = current ? 'verified' : evidence.status === 'revoked' ? 'revoked' : 'expired';
 

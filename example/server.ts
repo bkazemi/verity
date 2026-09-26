@@ -50,10 +50,12 @@ async function authenticate(request: Request) {
 
 const verity = createVerity({
   storage,
-  provider: githubProvider({
-    clientId: process.env.GITHUB_CLIENT_ID,
-    clientSecret: process.env.GITHUB_CLIENT_SECRET,
-  }),
+  providers: [
+    githubProvider({
+      clientId: process.env.GITHUB_CLIENT_ID,
+      clientSecret: process.env.GITHUB_CLIENT_SECRET,
+    }),
+  ],
   baseUrl: `${origin}/api/verity`,
   siteName: 'Example Community',
   verifierName: 'verity.example.com',

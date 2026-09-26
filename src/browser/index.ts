@@ -222,13 +222,10 @@ function safeUrl(value: string) {
 }
 
 /**
- * Absent means an older backend, which is allowed. Present means both sides must be
- * described, because a half-filled record would let a renderer imply a method for a side
- * that never reported one.
+ * Both sides must be described, because a half-filled record would let a renderer imply a
+ * method for a side that never reported one.
  */
 function validAttestations(value: unknown): boolean {
-  if (value === undefined) return true;
-
   if (!record(value)) return false;
 
   return (
@@ -267,7 +264,7 @@ function validEvidence(value: unknown): value is Evidence {
   if (!record(value) || !record(value.local) || !record(value.external)) return false;
 
   return (
-    ['id', 'provider', 'siteName', 'verifierName', 'evidenceUrl'].every(
+    ['id', 'provider', 'providerName', 'siteName', 'verifierName', 'evidenceUrl'].every(
       (k) => typeof value[k] === 'string',
     ) &&
     ['label', 'reference'].every(
@@ -277,14 +274,13 @@ function validEvidence(value: unknown): value is Evidence {
       (k) => typeof (value.external as Record<string, unknown>)[k] === 'string',
     ) &&
     (value.local.profileUrl === undefined || typeof value.local.profileUrl === 'string') &&
-    (value.providerName === undefined || typeof value.providerName === 'string') &&
     validAttestations(value.attestations) &&
     (value.local.kind === undefined || typeof value.local.kind === 'string') &&
     (value.external.kind === undefined ||
       ['account', 'key', 'page'].includes(String(value.external.kind))) &&
     (value.revokedAt === undefined ||
       (typeof value.revokedAt === 'number' && Number.isFinite(value.revokedAt))) &&
-    ['verified', 'expired', 'revoked'].includes(String(value.status)) &&
+    ['verified', 'unconfirmed', 'expired', 'revoked'].includes(String(value.status)) &&
     ['public', 'unlisted'].includes(String(value.visibility)) &&
     ['authenticatedAt', 'approvedAt', 'expiresAt'].every(
       (k) => typeof value[k] === 'number' && Number.isFinite(value[k]),

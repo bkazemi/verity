@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createVerity } from '../src/server/index.js';
+import type { Provider } from '../src/core/index.js';
 import {
   alice,
   bob,
@@ -10,10 +11,10 @@ import {
   MemoryStorage,
 } from './helpers.js';
 
-function fixture(provider = fakeProvider() as Parameters<typeof createVerity>[0]['provider']) {
+function fixture(providers: Provider[] = [fakeProvider()]) {
   const app = createVerity({
     storage: new MemoryStorage(),
-    provider,
+    providers,
     baseUrl: 'https://site.test/api/verity',
     siteName: 'Site',
     verifierName: 'Self-hosted Site',
@@ -229,7 +230,7 @@ test('the evidence page names how each side was established, without ranking the
       external: [
         {
           by: 'provider',
-          method: 'attestation',
+          method: 'gist',
           artifactUrl: 'javascript:alert(1)',
           confirmedAt: 2,
         },
@@ -248,7 +249,7 @@ test('the evidence page names how each side was established, without ranking the
 
 test('a holder-paced proof is published here, submitted here, and approved here', async () => {
   const provider = fakeArtifactProvider();
-  const f = fixture(provider);
+  const f = fixture([provider]);
 
   // No redirect away: the flow stays on this origin while the holder publishes.
   const start = await f.request('/sessions?kind=connect', { headers: { cookie: 'local=alice' } });
@@ -303,7 +304,7 @@ test('a holder-paced proof is published here, submitted here, and approved here'
   const evidence = (await f.app.service.mine(alice))[0]!;
 
   assert.equal(evidence.attestations!.external[0].artifactUrl, url);
-  assert.equal(evidence.attestations!.external[0].method, 'attestation');
+  assert.equal(evidence.attestations!.external[0].method, 'gist');
 
   // The published proof is offered to the reader on the evidence page.
   const page = await (await f.request(`/connections/${evidence.id}`)).text();
@@ -315,7 +316,7 @@ test('a holder-paced proof is published here, submitted here, and approved here'
 
 test('a refused proof says why on the result page, and any other failure does not', async () => {
   const provider = fakeArtifactProvider();
-  const f = fixture(provider);
+  const f = fixture([provider]);
 
   async function submit(artifact: string) {
     const start = await f.request('/sessions?kind=connect', { headers: { cookie: 'local=alice' } });
@@ -356,12 +357,12 @@ test('several methods are offered one by one, and a second one joins the record'
 
   assert.match(choice, /Sign in with GitHub/);
   assert.match(choice, /Publish a proof on GitHub/);
-  assert.match(choice, /name="method" value="attestation"/);
+  assert.match(choice, /name="method" value="gist"/);
 
   const id = await f.connect('public');
 
   // The same account, shown the other way.
-  const start = await f.request('/sessions?kind=connect&provider=github&method=attestation', {
+  const start = await f.request('/sessions?kind=connect&provider=github&method=gist', {
     headers: { cookie: 'local=alice' },
   });
 
@@ -412,7 +413,7 @@ test('several methods are offered one by one, and a second one joins the record'
 
 test('a proof handed over is taken as text, published here, and served as text', async () => {
   const provider = fakeDocumentProvider();
-  const f = fixture(provider);
+  const f = fixture([provider]);
 
   const start = await f.request('/sessions?kind=connect', { headers: { cookie: 'local=alice' } });
   const cookie = start.headers.get('set-cookie')!.split(';')[0]!;

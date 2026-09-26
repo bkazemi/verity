@@ -35,7 +35,7 @@ test(
 
       const options = {
         storage,
-        provider: fakeProvider(),
+        providers: [fakeProvider()],
         baseUrl: 'https://site.test/api/verity',
         siteName: 'Site',
         verifierName: 'Site',

@@ -40,7 +40,7 @@ export interface ServiceOptions {
    * `githubGistProvider()` and `githubLinkProvider()` are three ways to show one GitHub
    * account, and a record shown by more than one keeps them all. The first is the default.
    */
-  provider: Provider | Provider[];
+  providers: Provider[];
   baseUrl: string;
   siteName: string;
   verifierName: string;
@@ -64,7 +64,7 @@ export class VerityService {
   constructor(readonly options: ServiceOptions) {
     this.now = options.now ?? Date.now;
     this.baseUrl = options.baseUrl.replace(/\/$/, '');
-    this.providers = Array.isArray(options.provider) ? options.provider : [options.provider];
+    this.providers = options.providers;
 
     // A flow names its method by provider id and method, so that pair must say which.
     const keys = this.providers.map((p) => `${p.id} ${providerMethod(p)}`);
@@ -985,9 +985,6 @@ export class VerityService {
 
       held.confirmedAt = this.now();
 
-      // For an artifact method this field means last confirmed, not first authenticated.
-      if (main) current.authenticatedAt = this.now();
-
       await tx.put('connections', connection.id, current);
 
       return 1;
@@ -1085,15 +1082,8 @@ function sameAccount(a: ExternalAccount, b: ExternalAccount): boolean {
 }
 
 /**
- * Whether a flow of this kind showed the record's account. Removal from the external side
- * is started and approved by nobody local, so it takes the provider-issued id alone: a
- * profile address can change hands, and its next owner must not be able to remove the
- * last one's record. The weaker match is only for flows the local holder approves.
- */
-/**
- * Wraps a transaction so connections read through it are in the current shape. Records
- * written before `external` became a list held the main method there alone and the rest
- * under `further`; they are rewritten the next time the record is put.
+ * Wraps a transaction so records read through it are in the current shape. They are
+ * rewritten in that shape the next time they are put.
  */
 function upgraded(tx: Transaction): Transaction {
   return {
@@ -1104,23 +1094,58 @@ function upgraded(tx: Transaction): Transaction {
   };
 }
 
+/** Methods stored under an earlier name. */
+const renamed: Record<string, Method> = { attestation: 'gist' };
+
+type Stored = Attestation & { method: string };
+
+/**
+ * Brings one stored record up to date. Connections written before `external` became a
+ * list held the main method there alone and the rest under `further`, and connections
+ * and flows may name a method by an earlier name.
+ */
 function upgrade<K extends keyof Records>(kind: K, value: Records[K] | undefined) {
-  if (kind !== 'connections' || !value) return value;
+  if (!value) return value;
+
+  const method = (stored: Stored): Attestation => ({
+    ...stored,
+    method: renamed[stored.method] ?? (stored.method as Method),
+  });
+
+  if (kind === 'flows') {
+    const flow = value as Flow;
+
+    return (
+      flow.method && renamed[flow.method] ? { ...flow, method: renamed[flow.method] } : flow
+    ) as Records[K];
+  }
+
+  if (kind !== 'connections') return value;
 
   const attestations = (value as Connection).attestations as
-    | { local: Attestation; external: Attestation | Attestation[]; further?: Attestation[] }
-    | undefined;
+    { local: Stored; external: Stored | Stored[]; further?: Stored[] } | undefined;
 
-  if (!attestations || Array.isArray(attestations.external)) return value;
+  if (!attestations) return value;
 
-  const { further = [], ...rest } = attestations;
+  const external = Array.isArray(attestations.external)
+    ? attestations.external
+    : [attestations.external, ...(attestations.further ?? [])];
 
   return {
     ...value,
-    attestations: { ...rest, external: [attestations.external, ...further] },
+    attestations: {
+      local: method(attestations.local),
+      external: external.map(method),
+    },
   } as Records[K];
 }
 
+/**
+ * Whether a flow of this kind showed the record's account. Removal from the external side
+ * is started and approved by nobody local, so it takes the provider-issued id alone: a
+ * profile address can change hands, and its next owner must not be able to remove the
+ * last one's record. The weaker match is only for flows the local holder approves.
+ */
 function matches(kind: Flow['kind'], held: ExternalAccount, shown: ExternalAccount): boolean {
   if (kind === 'revoke' || kind === 'share-revoke') return held.id === shown.id;
 

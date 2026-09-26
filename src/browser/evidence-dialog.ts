@@ -102,12 +102,12 @@ function linkMark(): SVGSVGElement {
  * it. The methods are named, never ranked: which ones convince is the reader's call.
  */
 function attestationNote(
-  attestation: Attestation | undefined,
+  attestation: Attestation,
   names: { site: string; provider: string },
 ): HTMLElement[] {
-  const label = attestation && attestationLabel(attestation.method, names);
+  const label = attestationLabel(attestation.method, names);
 
-  if (!attestation || !label) return [];
+  if (!label) return [];
 
   const note = node('div', label, 'muted method');
 
@@ -126,10 +126,10 @@ function attestationNote(
  * indented under it.
  */
 function additionalNotes(
-  attestations: Attestation[] | undefined,
+  attestations: Attestation[],
   names: { site: string; provider: string },
 ): HTMLElement[] {
-  return (attestations ?? []).flatMap((attestation) => {
+  return attestations.flatMap((attestation) => {
     const label = attestationLabel(attestation.method, names);
 
     if (!label) return [];
@@ -183,7 +183,7 @@ function accountCard(
 function render(content: HTMLElement, evidence: Evidence) {
   const current = evidence.status === 'verified' && evidence.expiresAt > Date.now();
   const status = statusLabel(evidence, Date.now());
-  const provider = evidence.providerName ?? evidence.provider;
+  const provider = evidence.providerName;
   const summary = node('div', '', 'summary');
   const copy = node('div');
 
@@ -213,9 +213,9 @@ function render(content: HTMLElement, evidence: Evidence) {
 
   // When an artifact was last read belongs with the other times, not inside a sentence.
   // Only artifact methods drift: a sign-in is established once and does not go stale.
-  const main = evidence.attestations?.external[0];
+  const main = evidence.attestations.external[0];
 
-  if (main?.artifactUrl) dateRows.push(['Last checked', main.confirmedAt]);
+  if (main.artifactUrl) dateRows.push(['Last checked', main.confirmedAt]);
 
   for (const [label, time] of dateRows) {
     dates.append(node('dt', label), node('dd', moment(time)));
@@ -234,7 +234,7 @@ function render(content: HTMLElement, evidence: Evidence) {
     // card stays: that one is the provider's identifier, not the site's own wording.
     undefined,
     evidence.local.profileUrl,
-    ...attestationNote(evidence.attestations?.local, names),
+    ...attestationNote(evidence.attestations.local, names),
   );
 
   const logo = providerMark(evidence.provider);
@@ -250,7 +250,7 @@ function render(content: HTMLElement, evidence: Evidence) {
     // above it, so it cannot sit before that state has been given.
     summary,
     ...attestationNote(main, names),
-    ...additionalNotes(evidence.attestations?.external.slice(1), names),
+    ...additionalNotes(evidence.attestations.external.slice(1), names),
     dates,
   );
 

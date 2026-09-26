@@ -26,7 +26,7 @@ function fixture(provider: FakeProvider = fakeProvider(), extra: Partial<Service
 
   const service = new VerityService({
     storage,
-    provider,
+    providers: [provider],
     baseUrl: 'https://site.test/api/verity',
     siteName: 'Site',
     verifierName: 'Site',
@@ -431,7 +431,7 @@ test('a provider naming its own method has it recorded, and older records infer 
   assert.deepEqual(inferred.external, [{ by: 'provider', method: 'oauth', confirmedAt: 1000000 }]);
 });
 
-test('a record from before external was a list reads as one, main method first', async () => {
+test('a record in an older shape reads in the current one', async () => {
   const f = fixture();
   const { id } = await f.connect('public');
   const oauth = { by: 'provider', method: 'oauth', confirmedAt: 1000000 } as const;
@@ -446,17 +446,21 @@ test('a record from before external was a list reads as one, main method first',
   await f.storage.transaction(async (tx) => {
     const stored = (await tx.get('connections', id))!;
 
-    // The shape it was stored in then: the main method alone, the rest beside it.
+    // The main method alone, the rest beside it, and a gist under its old name.
     (stored as { attestations: unknown }).attestations = {
       local: stored.attestations!.local,
       external: oauth,
-      further: [backlink],
+      further: [backlink, { ...backlink, method: 'attestation' }],
     };
 
     await tx.put('connections', id, stored);
   });
 
-  assert.deepEqual((await f.service.read(id)).attestations!.external, [oauth, backlink]);
+  assert.deepEqual((await f.service.read(id)).attestations.external, [
+    oauth,
+    backlink,
+    { ...backlink, method: 'gist' },
+  ]);
 });
 
 test('a holder-paced proof is published, read back, and kept open for the reader', async () => {
@@ -501,7 +505,7 @@ test('a holder-paced proof is published, read back, and kept open for the reader
   // The proof stays open: where it is, what should be there, and when it was read.
   assert.deepEqual(evidence.attestations!.external[0], {
     by: 'provider',
-    method: 'attestation',
+    method: 'gist',
     artifactUrl: url,
     expect: good.expect,
     confirmedAt: 1000000,
@@ -577,8 +581,8 @@ test('a published proof is read again on a schedule and carries the time forward
   assert.equal(evidence.status, 'verified');
   assert.equal(evidence.attestations!.external[0].confirmedAt, 1001000);
 
-  // For an artifact method this is when it was last confirmed, not first seen.
-  assert.equal(evidence.authenticatedAt, 1001000);
+  // A reread confirms the proof again; it does not show the account again.
+  assert.equal(evidence.authenticatedAt, 1000000);
 });
 
 test('a proof that stops resolving ages out of verified and returns when it does', async () => {
@@ -592,7 +596,7 @@ test('a proof that stops resolving ages out of verified and returns when it does
   assert.equal((await f.service.read(f.id)).status, 'verified');
 
   f.advance(4000);
-  assert.equal((await f.service.read(f.id)).status, 'expired');
+  assert.equal((await f.service.read(f.id)).status, 'unconfirmed');
   assert.deepEqual(await f.service.published(), []);
 
   // Nothing was revoked, so republishing the proof restores the connection.
@@ -641,7 +645,7 @@ test('a reread that names a different account confirms nothing', async () => {
   assert.equal((await f.service.read(f.id)).attestations!.external[0].confirmedAt, 1000000);
 
   f.advance(4000);
-  assert.equal((await f.service.read(f.id)).status, 'expired');
+  assert.equal((await f.service.read(f.id)).status, 'unconfirmed');
 });
 
 test('a provider that never answers does not hold up the run', async () => {

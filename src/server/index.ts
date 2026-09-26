@@ -120,13 +120,13 @@ function card(
  * this backend's word for it. Methods are named, never ranked.
  */
 function attestationNote(
-  attestation: Attestation | undefined,
+  attestation: Attestation,
   names: { site: string; provider: string },
   additional = false,
 ) {
-  const label = attestation && attestationLabel(attestation.method, names);
+  const label = attestationLabel(attestation.method, names);
 
-  if (!attestation || !label) return '';
+  if (!label) return '';
 
   // Set by a provider implementation from holder-supplied input, so it reaches an href
   // only after being confirmed http(s).
@@ -142,11 +142,8 @@ function attestationNote(
 }
 
 /** The external side's methods: the one it was first shown by, then each one since. */
-function externalNotes(
-  attestations: Attestations | undefined,
-  names: { site: string; provider: string },
-) {
-  const [main, ...rest] = attestations?.external ?? [];
+function externalNotes(attestations: Attestations, names: { site: string; provider: string }) {
+  const [main, ...rest] = attestations.external;
 
   return attestationNote(main, names) + rest.map((a) => attestationNote(a, names, true)).join('');
 }
@@ -158,11 +155,9 @@ function externalNotes(
 function methodAction(provider: Provider): string {
   const actions: Record<string, string> = {
     oauth: `Sign in with ${provider.name}`,
-    attestation: `Publish a proof on ${provider.name}`,
+    gist: `Publish a proof on ${provider.name}`,
     backlink: `Link back from ${provider.name}`,
     signature: `Sign with ${provider.name}`,
-    dns: 'Add a DNS record',
-    wellknown: 'Publish a file on your domain',
   };
 
   return actions[providerMethod(provider)] ?? `Continue with ${provider.name}`;
@@ -220,7 +215,7 @@ function subjectNoun(kind: string | undefined): string | undefined {
 }
 
 function evidencePage(e: Evidence & { linkExpiresAt?: number }, base: string, report: string) {
-  const names = { site: e.siteName, provider: e.providerName ?? e.provider };
+  const names = { site: e.siteName, provider: e.providerName };
 
   const local = localSide(e.local, e.siteName);
   const current = e.status !== 'revoked' && e.expiresAt > Date.now();
@@ -236,7 +231,7 @@ function evidencePage(e: Evidence & { linkExpiresAt?: number }, base: string, re
       local.value,
       e.local.profileUrl,
       undefined,
-      attestationNote(e.attestations?.local, names),
+      attestationNote(e.attestations.local, names),
     ) +
       card(
         names.provider,
@@ -253,7 +248,7 @@ function evidencePage(e: Evidence & { linkExpiresAt?: number }, base: string, re
         // Only a method that publishes an artifact drifts; a sign-in does not go stale.
         [
           'Last checked',
-          e.attestations?.external[0].artifactUrl
+          e.attestations.external[0].artifactUrl
             ? e.attestations.external[0].confirmedAt
             : undefined,
         ],

@@ -1,6 +1,11 @@
 export type Visibility = 'public' | 'unlisted';
 
-export type Status = 'verified' | 'expired' | 'revoked';
+/**
+ * `unconfirmed` is a published proof that has not been read lately. It is not disproved,
+ * and turns back to `verified` the moment the proof reads again. `expired` is an approval
+ * that ran out, which only the holder renewing it undoes.
+ */
+export type Status = 'verified' | 'unconfirmed' | 'expired' | 'revoked';
 
 /** What a site links: one of its accounts, a single page, or the site itself. */
 export type LocalKind = 'account' | 'page' | 'site';
@@ -38,8 +43,7 @@ export interface ExternalAccount {
  * form of the others: a site is the only authority on its own namespace, so no external
  * source could improve on it. The rest publish an artifact a reader can fetch.
  */
-export type Method =
-  'declared' | 'oauth' | 'attestation' | 'backlink' | 'dns' | 'wellknown' | 'signature';
+export type Method = 'declared' | 'oauth' | 'gist' | 'backlink' | 'signature';
 
 /** Who vouches for one side: this backend from its own records, or the account's provider. */
 export type Attester = 'backend' | 'provider';
@@ -90,7 +94,8 @@ export interface Connection {
   approvedAt: number;
   expiresAt: number;
   revokedAt?: number;
-  revocationReason?: string;
+  /** Who removed it: the local holder, the external holder, or a withdrawal the provider read. */
+  revocationReason?: 'local' | 'external' | 'withdrawn';
   /** Absent on records written before methods were recorded; evidence infers those. */
   attestations?: Attestations;
   /** The proof itself, for a method whose artifact this backend publishes rather than reads. */
@@ -252,13 +257,13 @@ export interface Evidence {
   local: Omit<LocalAccount, 'id'>;
   external: ExternalAccount;
   provider: string;
-  /** Display name from the provider implementation; absent from older backends. */
-  providerName?: string;
+  /** Display name from the provider implementation. */
+  providerName: string;
   /**
    * How each side was established, so a reader can weigh them separately instead of
-   * reading one undifferentiated "verified". Absent from older backends.
+   * reading one undifferentiated "verified".
    */
-  attestations?: Attestations;
+  attestations: Attestations;
   siteName: string;
   verifierName: string;
   visibility: Visibility;
@@ -290,7 +295,7 @@ export function status(connection: Connection, now: number, freshness = freshnes
 
   const main = connection.attestations?.external[0];
 
-  if (main && !fresh(main, now, freshness)) return 'expired';
+  if (main && !fresh(main, now, freshness)) return 'unconfirmed';
 
   return 'verified';
 }
@@ -310,17 +315,15 @@ export function fresh(attestation: Attestation, now: number, freshness = freshne
 }
 
 /**
- * The word for a record's state. It separates the two ways one stops counting: an approval
- * that ran out is over until the holder renews it, while a proof that has not been read
- * lately is only unconfirmed and says so again the moment it reads. Both are `expired` as
- * a status, since a reader should act the same way, but they do not mean the same thing.
+ * The word for a record's state. Evidence can be read after it was issued, so an approval
+ * that has run out since reads as expired whatever status it was issued with.
  */
 export function statusLabel(evidence: Pick<Evidence, 'status' | 'expiresAt'>, now: number): string {
   if (evidence.status === 'revoked') return 'Revoked';
 
-  if (evidence.status === 'verified' && evidence.expiresAt > now) return 'Verified';
+  if (evidence.status === 'expired' || evidence.expiresAt <= now) return 'Expired';
 
-  return evidence.expiresAt > now ? 'Unconfirmed' : 'Expired';
+  return evidence.status === 'unconfirmed' ? 'Unconfirmed' : 'Verified';
 }
 
 /**
@@ -371,10 +374,8 @@ export function attestationLabel(
   return {
     declared: `Stated by ${names.site}`,
     oauth: `Signed in with ${names.provider}`,
-    attestation: `Published a proof on ${names.provider}`,
+    gist: `Published a proof on ${names.provider}`,
     backlink: `Linked back to ${names.site}`,
-    dns: 'Proved with a DNS record',
-    wellknown: 'Proved with a file on the domain',
     signature: 'Proved with a signature',
   }[method];
 }

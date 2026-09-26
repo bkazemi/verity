@@ -33,7 +33,7 @@ test(
 
     const service = new VerityService({
       storage,
-      provider,
+      providers: [provider],
       baseUrl: `${origin}/api/verity`,
       siteName: 'Example',
       verifierName: 'Example',

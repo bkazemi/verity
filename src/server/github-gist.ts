@@ -13,7 +13,7 @@ export function githubGistProvider(options: { fetch?: typeof fetch } = {}): Arti
   return {
     id: 'github',
     name: 'GitHub',
-    method: 'attestation',
+    method: 'gist',
     artifact: 'location',
     instructions: (expect) => [
       'Publish this line in a public gist at gist.github.com, then paste the gist address below.',

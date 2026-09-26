@@ -144,6 +144,10 @@ test('distributed badge renders current/expired/revoked evidence and fails close
     authenticatedAt: 1,
     approvedAt: 1,
     expiresAt: Date.now() + 60000,
+    attestations: {
+      local: { by: 'backend', method: 'declared', confirmedAt: 1 },
+      external: [{ by: 'provider', method: 'oauth', confirmedAt: 1 }],
+    },
   };
 
   const context = vm.createContext({
@@ -291,9 +295,8 @@ test('distributed badge renders current/expired/revoked evidence and fails close
   assert.equal(element.find('svg')[0]!.find('path')[1]!.attributes['stroke-dasharray'], '108 176');
   assert.equal(element.links()[0]!.children.at(-1)!.className, 'icon');
 
-  // A proof nobody has been able to read lately has not reached its expiry, and saying
-  // "expired" of a record still inside its window would be the wrong thing to have said.
-  evidence = { ...evidence, status: 'expired', expiresAt: Date.now() + 60000 };
+  // A proof nobody has been able to read lately is inside its approval, so it is unconfirmed.
+  evidence = { ...evidence, status: 'unconfirmed', expiresAt: Date.now() + 60000 };
   await client.mountBadge(element, { connectionId: 'original' });
   assert.match(element.textContent, /Unconfirmed/);
   assert.ok(!element.textContent.includes('Expired'));
@@ -358,7 +361,7 @@ test('distributed badge renders current/expired/revoked evidence and fails close
       external: [
         {
           by: 'provider',
-          method: 'attestation',
+          method: 'gist',
           artifactUrl: 'https://gist.github.com/alice/abc',
           expect: 'verity-token',
           confirmedAt: 2,
@@ -376,6 +379,8 @@ test('distributed badge renders current/expired/revoked evidence and fails close
     { expiresAt: 'tomorrow' },
     // One side described and the other missing would let a renderer imply a method
     // for a side that never reported one.
+    { attestations: undefined },
+    { providerName: undefined },
     { attestations: { local: declared } },
     { attestations: { local: declared, external: [{ ...declared, by: 'nobody' }] } },
     // The first method is the one a record is judged by, so there must be one.
@@ -413,7 +418,7 @@ test('distributed badge renders current/expired/revoked evidence and fails close
  * because how each side was established is the thing under test; everything else is fixed.
  */
 async function renderDialog(
-  attestations?: Record<string, unknown>,
+  attestations: Record<string, unknown>,
   overrides: Record<string, unknown> = {},
 ) {
   const asset = await readFile(new URL('../dist/verity.js', import.meta.url), 'utf8');
@@ -525,7 +530,7 @@ test('the evidence dialog presents both sides of a link as parallel cards', asyn
     external: [
       {
         by: 'provider',
-        method: 'attestation',
+        method: 'gist',
         artifactUrl: 'https://gist.github.com/alice/abc',
         expect: 'verity-c1',
         confirmedAt: 2,
@@ -623,13 +628,6 @@ test('an unrecognised method is omitted rather than described, and oauth offers 
   assert.match(signedIn.dialog.textContent, /Signed in with GitHub/);
   assert.ok(!signedIn.dialog.textContent.includes('View the proof'));
   assert.ok(!signedIn.dialog.textContent.includes('last checked'));
-
-  // An older backend sends no attestations at all, and the cards simply omit the line.
-  const older = await renderDialog();
-
-  assert.equal(older.cards.length, 2);
-  assert.ok(!older.dialog.textContent.includes('Stated by'));
-  assert.ok(!older.dialog.textContent.includes('Signed in with'));
 });
 
 test('a proof gone unread reads as unconfirmed, not as an approval that ran out', async () => {
@@ -638,14 +636,14 @@ test('a proof gone unread reads as unconfirmed, not as an approval that ran out'
     external: [
       {
         by: 'provider',
-        method: 'attestation',
+        method: 'gist',
         artifactUrl: 'https://gist.github.com/alice/abc',
         confirmedAt: 1,
       },
     ],
   };
 
-  const stale = await renderDialog(attestations, { status: 'expired' });
+  const stale = await renderDialog(attestations, { status: 'unconfirmed' });
 
   assert.match(stale.dialog.textContent, /Unconfirmed/);
   assert.ok(!stale.dialog.textContent.includes('Expired'));

@@ -163,7 +163,7 @@ export class VerityStore {
       storage: new CloudflareStorage(ctx.storage),
       // Two ways of showing one GitHub account. Whichever is used first is the record's
       // main method, and the other is listed beneath it once used.
-      provider: [
+      providers: [
         githubProvider({
           clientId: env.GITHUB_CLIENT_ID,
           clientSecret: env.GITHUB_CLIENT_SECRET,

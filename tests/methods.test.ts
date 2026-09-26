@@ -42,7 +42,7 @@ function fixture(extra: ArtifactProvider[] = []) {
 
   const service = new VerityService({
     storage: new MemoryStorage(),
-    provider: [oauth, backlink, ...extra],
+    providers: [oauth, backlink, ...extra],
     baseUrl: 'https://site.test/api/verity',
     siteName: 'Site',
     verifierName: 'Site',
@@ -213,7 +213,7 @@ test('joining at a new address drops the additional proofs that named the old on
 
   const flow = await f.service.start(moved, undefined, 'connect', {
     provider: 'github',
-    method: 'attestation',
+    method: 'gist',
   });
 
   notes.artifacts.set('https://notes.test/alice', flow.expect!);
@@ -227,7 +227,7 @@ test('joining at a new address drops the additional proofs that named the old on
 
   assert.deepEqual(
     evidence.attestations!.external.map((a) => a.method),
-    ['oauth', 'attestation'],
+    ['oauth', 'gist'],
   );
 
   // Nothing is left to confirm the link to where the subject used to be.
@@ -293,7 +293,7 @@ test('a flow stays in the namespace of the record it acts on', async () => {
 
   const service = new VerityService({
     storage: new MemoryStorage(),
-    provider: [fakeProvider(), notes],
+    providers: [fakeProvider(), notes],
     baseUrl: 'https://site.test/api/verity',
     siteName: 'Site',
     verifierName: 'Site',
@@ -314,7 +314,7 @@ test('each method is configured once', () => {
     () =>
       new VerityService({
         storage: new MemoryStorage(),
-        provider: [fakeProvider(), fakeProvider()],
+        providers: [fakeProvider(), fakeProvider()],
         baseUrl: 'https://site.test/api/verity',
         siteName: 'Site',
         verifierName: 'Site',

@@ -57,10 +57,12 @@ import { createVerity, githubProvider } from '@bkazemi/verity';
 
 const verity = createVerity({
   storage,
-  provider: githubProvider({
-    clientId: process.env.GITHUB_CLIENT_ID!,
-    clientSecret: process.env.GITHUB_CLIENT_SECRET!,
-  }),
+  providers: [
+    githubProvider({
+      clientId: process.env.GITHUB_CLIENT_ID!,
+      clientSecret: process.env.GITHUB_CLIENT_SECRET!,
+    }),
+  ],
   baseUrl: 'https://community.example/api/verity',
   siteName: 'Example Community',
   verifierName: 'community.example',
@@ -171,10 +173,10 @@ import {
 
 All methods except GitHub sign-in let the user publish the proof in their own time and come back. Gists and link-backs can be taken down later, so Verity re-reads them on a schedule. A PGP signature is kept by Verity and published at `<baseUrl>/connections/<id>/proof`.
 
-**Several at once.** Pass an array, and `/verify` offers each method as its own button:
+**Several at once.** List more than one, and `/verify` offers each method as its own button:
 
 ```ts
-provider: [githubProvider({ clientId, clientSecret }), githubLinkProvider()],
+providers: [githubProvider({ clientId, clientSecret }), githubLinkProvider()],
 ```
 
 Proving the same account a second way adds that proof to the existing record instead of creating another.

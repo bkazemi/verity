@@ -806,13 +806,15 @@ function backlink(body: string) {
 
   const service = new VerityService({
     storage,
-    provider: linkProvider({
-      name: 'a page of your own',
-      fetch: (() =>
-        Promise.resolve(
-          new Response(body, { status: 200, headers: { 'content-type': 'text/html' } }),
-        )) as unknown as typeof fetch,
-    }),
+    providers: [
+      linkProvider({
+        name: 'a page of your own',
+        fetch: (() =>
+          Promise.resolve(
+            new Response(body, { status: 200, headers: { 'content-type': 'text/html' } }),
+          )) as unknown as typeof fetch,
+      }),
+    ],
     baseUrl: 'https://site.test/api/verity',
     siteName: 'Site',
     verifierName: 'Site',
