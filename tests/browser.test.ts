@@ -9,6 +9,7 @@ class Element {
   href = '';
   rel = '';
   target = '';
+  title = '';
   className = '';
   shadowRoot?: Element;
   tagName = '';
@@ -569,13 +570,17 @@ test('the evidence dialog presents both sides of a link as parallel cards', asyn
   // The proof explains the verified state, so it is read after that state, not before it.
   assert.deepEqual(
     external.children.map((child) => child.className || child.tagName),
-    ['h3', 'a', 'muted reference', 'summary', 'muted method', 'muted proof', 'dl'],
+    ['h3', 'a', 'muted reference', 'summary', 'muted method', 'dl'],
   );
 
   // A published proof is reachable, so a reader can check it without trusting this backend.
-  const proof = external.links().find((link) => link.textContent.includes('View the proof'))!;
+  // The method's name is the link, and its title says where it leads and when it was read.
+  const proof = external
+    .links()
+    .find((link) => link.textContent === 'Published a proof on GitHub')!;
 
   assert.equal(proof.href, 'https://gist.github.com/alice/abc');
+  assert.match(proof.title, /^View the proof at gist\.github\.com \| Last checked /);
 
   // Every link out of the dialog opens beside it: the record is read against what it
   // links to, and following one in place would take the reader off the page.
@@ -617,7 +622,7 @@ test('an unrecognised method is omitted rather than described, and oauth offers 
 
   // Nothing is claimed about a method this renderer does not understand.
   assert.ok(!unknown.dialog.textContent.includes('telepathy'));
-  assert.ok(!unknown.dialog.textContent.includes('View the proof'));
+  assert.ok(!unknown.dialog.links().some((link) => link.title.startsWith('View the proof')));
 
   // oauth leaves no public artifact, so it is named without offering a link to open.
   const signedIn = await renderDialog({
@@ -626,7 +631,7 @@ test('an unrecognised method is omitted rather than described, and oauth offers 
   });
 
   assert.match(signedIn.dialog.textContent, /Signed in with GitHub/);
-  assert.ok(!signedIn.dialog.textContent.includes('View the proof'));
+  assert.ok(!signedIn.dialog.links().some((link) => link.title.startsWith('View the proof')));
   assert.ok(!signedIn.dialog.textContent.includes('last checked'));
 });
 
@@ -652,7 +657,7 @@ test('a proof gone unread reads as unconfirmed, not as an approval that ran out'
   assert.match(stale.dialog.textContent, /Valid until/);
 
   // The proof is still linked: an unread proof is not a withdrawn one.
-  assert.match(stale.dialog.textContent, /View the proof/);
+  assert.ok(stale.dialog.links().some((link) => link.title.startsWith('View the proof')));
   assert.match(stale.dialog.textContent, /Last checked/);
 
   const lapsed = await renderDialog(attestations, { status: 'expired', expiresAt: 1 });
@@ -743,7 +748,15 @@ test('methods after the first sit beneath it, each with its own proof', async ()
     .map((line) => line.textContent);
 
   assert.match(text, /Signed in with GitHub\+ Linked back to site\.test/);
-  assert.deepEqual(additional, ['+ Linked back to site.test', 'View the proof']);
+  assert.deepEqual(additional, ['+ Linked back to site.test']);
+
+  // Each proof is named by its own link, so two on one card cannot be mistaken for each other.
+  const backlink = cards[1]!
+    .links()
+    .find((link) => link.textContent === 'Linked back to site.test')!;
+
+  assert.equal(backlink.href, 'https://github.com/alice');
+  assert.match(backlink.title, /^View the proof at github\.com \| Last checked /);
 
   // The method is named in words, never by the markup it happens to use.
   assert.ok(!text.includes('rel='));

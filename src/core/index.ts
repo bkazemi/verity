@@ -379,3 +379,13 @@ export function attestationLabel(
     signature: 'Proved with a signature',
   }[method];
 }
+
+/**
+ * The hover text on a proof link: where it leads, then when it was last read there. A
+ * proof this backend serves itself is never reread, so it gives no such time.
+ */
+export function proofTitle(attestation: Attestation, when: (time: number) => string): string {
+  const where = `View the proof at ${new URL(attestation.artifactUrl!).host}`;
+
+  return attestation.hosted ? where : `${where} | Last checked ${when(attestation.confirmedAt)}`;
+}

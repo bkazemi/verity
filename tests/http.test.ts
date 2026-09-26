@@ -405,7 +405,7 @@ test('several methods are offered one by one, and a second one joins the record'
 
   assert.match(
     page,
-    /Signed in with GitHub<\/p><p class="how additional">\+ Published a proof on GitHub<\/p><p class="how additional"><a/,
+    /Signed in with GitHub<\/p><p class="how additional">\+ <a href="[^"]+" rel="noreferrer" title="View the proof at [^"|]+ \| Last checked [^"]+">Published a proof on GitHub<\/a><\/p>/,
   );
 
   assert.equal((await f.app.service.mine(alice)).length, 1);

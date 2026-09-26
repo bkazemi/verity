@@ -2,6 +2,7 @@ import {
   attestationLabel,
   externalName,
   localSide,
+  proofTitle,
   statusLabel,
   type Attestation,
   type Evidence,
@@ -32,10 +33,9 @@ const styles = `
   .account h3 { display: flex; align-items: center; gap: 6px; margin: 0 0 3px; color: #6b786f; font-size: 11px; font-weight: 550; }
   .account a, .account strong { font-weight: 650; font-size: 14px; }
   /* The account's own name carries that weight; a link inside a line of prose does not. */
-  .summary a { font: inherit; }
+  .summary a, .method a, .additional a { font: inherit; }
   .reference { margin-top: 2px; }
   .method { margin-top: 8px; }
-  .proof { margin-top: 2px; }
   .additional { margin-top: 2px; padding-left: 12px; }
   .joiner { display: block; width: 20px; height: 20px; margin: 8px auto -4px; color: #90a096; }
   dl { margin: 16px 0 0; padding-top: 12px; border-top: 1px solid #e5e9e3; display: grid; grid-template-columns: auto 1fr; gap: 5px 16px; font-size: 11px; }
@@ -98,52 +98,35 @@ function linkMark(): SVGSVGElement {
 
 /**
  * Names how one side was established, inside that side's card. A method that published a
- * proof links it, so a reader can check the claim without taking this backend's word for
- * it. The methods are named, never ranked: which ones convince is the reader's call.
+ * proof is itself the link to it, so a reader can check the claim without taking this
+ * backend's word for it, and several proofs on one card each say which one they open.
+ * The methods are named, never ranked: which ones convince is the reader's call.
+ * Additional methods sit beneath the main one, indented under it.
  */
 function attestationNote(
   attestation: Attestation,
   names: { site: string; provider: string },
+  additional = false,
 ): HTMLElement[] {
   const label = attestationLabel(attestation.method, names);
 
   if (!label) return [];
 
-  const note = node('div', label, 'muted method');
+  const note = node('div', additional ? '+ ' : '', `muted ${additional ? 'additional' : 'method'}`);
 
   // Evidence is rejected before it reaches here unless every artifact url is http(s).
-  if (!attestation.artifactUrl) return [note];
+  if (!attestation.artifactUrl) {
+    note.append(document.createTextNode(label));
 
-  const proof = node('div', '', 'muted proof');
+    return [note];
+  }
 
-  proof.append(outward(node('a', 'View the proof'), attestation.artifactUrl));
+  const proof = outward(node('a', label), attestation.artifactUrl);
 
-  return [note, proof];
-}
+  proof.title = proofTitle(attestation, moment);
+  note.append(proof);
 
-/**
- * The additional methods the same account was shown by, each beneath the main one and
- * indented under it.
- */
-function additionalNotes(
-  attestations: Attestation[],
-  names: { site: string; provider: string },
-): HTMLElement[] {
-  return attestations.flatMap((attestation) => {
-    const label = attestationLabel(attestation.method, names);
-
-    if (!label) return [];
-
-    const note = node('div', `+ ${label}`, 'muted additional');
-
-    if (!attestation.artifactUrl) return [note];
-
-    const proof = node('div', '', 'muted additional');
-
-    proof.append(outward(node('a', 'View the proof'), attestation.artifactUrl));
-
-    return [note, proof];
-  });
+  return [note];
 }
 
 /** Seconds are noise on a record measured in days, and every time here reads the same way. */
@@ -250,7 +233,7 @@ function render(content: HTMLElement, evidence: Evidence) {
     // above it, so it cannot sit before that state has been given.
     summary,
     ...attestationNote(main, names),
-    ...additionalNotes(evidence.attestations.external.slice(1), names),
+    ...evidence.attestations.external.slice(1).flatMap((a) => attestationNote(a, names, true)),
     dates,
   );
 

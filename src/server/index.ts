@@ -4,6 +4,7 @@ import {
   externalName,
   isArtifactProvider,
   localSide,
+  proofTitle,
   providerMethod,
   statusLabel,
   type Attestation,
@@ -116,8 +117,9 @@ function card(
 
 /**
  * Names how one side was established, inside that side's card. Where the method published
- * a proof the reader can open it, which is what lets them check the claim without taking
- * this backend's word for it. Methods are named, never ranked.
+ * a proof the name is the link to it, which is what lets the reader check the claim
+ * without taking this backend's word for it, and keeps several proofs apart. Methods are
+ * named, never ranked.
  */
 function attestationNote(
   attestation: Attestation,
@@ -134,11 +136,11 @@ function attestationNote(
 
   const how = `how${additional ? ' additional' : ''}`;
 
-  return `<p class="${how}">${additional ? '+ ' : ''}${escape(label)}</p>${
+  return `<p class="${how}">${additional ? '+ ' : ''}${
     artifact
-      ? `<p class="${how}"><a href="${escape(artifact)}" rel="noreferrer">View the proof</a></p>`
-      : ''
-  }`;
+      ? `<a href="${escape(artifact)}" rel="noreferrer" title="${escape(proofTitle(attestation, moment))}">${escape(label)}</a>`
+      : escape(label)
+  }</p>`;
 }
 
 /** The external side's methods: the one it was first shown by, then each one since. */
